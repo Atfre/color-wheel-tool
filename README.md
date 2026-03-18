@@ -4,7 +4,7 @@ A Color Wheel tool for Source Filmmaker built using **Python**.
 
 This script adds a Color Wheel + light properties system to the rigs section of your lights in Source Filmmaker, allowing you to change light colors and other settings from there instead of relying on SFM’s default RGB sliders.
 
-The color wheel and brightness slider are inspired by Blender system. This tool introduces a more intuitive and efficient way to modify your lights.
+The color wheel and sliders are inspired by Blender system. This tool introduces a more intuitive and efficient way to modify your lights.
 
 ## ✨ Features
 
@@ -15,6 +15,7 @@ The color wheel and brightness slider are inspired by Blender system. This tool 
 - HEX code display and copy button (idea by: Dani3D)
 - Editable values by double-clicking
 - Tooltips for each property when hovering
+- Property sliders now work like in Blender, reaching values beyond the usual 0-1 range, with a maximum of 250
 - Organized sections for each light property
   - Intensity
   - Radius
