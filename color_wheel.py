@@ -155,8 +155,8 @@ class COLORWheel(QtGui.QWidget):
                     if angle < 0: angle += 360
                     sat = dist / self._radius
                     c = QtGui.QColor()
-                    # 90% desaturation to make it similar to SFMs desaturated colors
-                    c.setHsv(int(angle), int(sat * 255 * 0.90), 255)
+                    # 90% desaturation to make it similar to SFMs desaturated colors [REMOVED]
+                    c.setHsv(int(angle), int(sat * 255 * 1), 255)
                     image.setPixel(x, y, c.rgb())
                 else:
                     image.setPixel(x, y, QtGui.QColor(40, 40, 40).rgb())
@@ -270,76 +270,137 @@ class BrightnessSlider(QtGui.QWidget):
     def getValue(self): return self._value
 
 ## Property Sliders
-class PropertySliders(QtGui.QWidget):
-    def __init__(self, label, minVal, maxVal, defaultVal, decimals=2, parent=None):
-        super(PropertySliders, self).__init__(parent)
-        self._min, self._max, self._decimals = minVal, maxVal, decimals
-        layout = QtGui.QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        self.setLayout(layout)
-        lbl = QtGui.QLabel(label)
-        lbl.setFixedWidth(130)
-        lbl.setStyleSheet("font-size: 11px;")
-        layout.addWidget(lbl)
-        self.slider = QtGui.QSlider(QtCore.Qt.Horizontal)
-        self.slider.setMinimum(0)
-        self.slider.setMaximum(1000)
-        self.slider.setValue(self._toSlider(defaultVal))
-        self.slider.valueChanged.connect(self._onSlider)
-        layout.addWidget(self.slider)
-        self.valLabel = QtGui.QLabel(("%%.%df" % decimals) % defaultVal)
-        self.valLabel.setFixedWidth(46)
-        self.valLabel.setStyleSheet("font-size: 11px;")
-        self.valLabel.mouseDoubleClickEvent = lambda e: self._startEdit()
-        layout.addWidget(self.valLabel)
+# Blender-style drag slider. A rectangle that you can drag left to right
+# The sensibility increases depending on how further you drag the bar
+# Double-click to type a value directly
+class _BlenderBar(QtGui.QWidget):
+    def __init__(self, ow):
+        super(_BlenderBar, self).__init__(ow)
+        self._ow = ow
+        self.setFixedHeight(18)
+        self.setMinimumWidth(80)
+        self.setCursor(QtCore.Qt.SizeHorCursor)
 
-    def _toSlider(self, val):
-        return int((val - self._min) / (self._max - self._min) * 1000)
+    def paintEvent(self, event):
+        ow = self._ow
+        value = ow._value
+        owmax = ow._max
+        owsoftmax = ow._softMax
+        minim = ow._min
+        painter = QtGui.QPainter(self)
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, QtGui.QColor(45, 45, 45))
+        frac = max(0.0, min(1.0, (value - minim) / (owsoftmax - minim)))
+        fillW = int(frac * w)
+        if fillW > 0:
+            painter.fillRect(0, 0, fillW, h, QtGui.QColor(60, 90, 120, 180))
+        painter.setPen(QtGui.QPen(QtGui.QColor(220, 220, 220)))
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+        txt = ("%%.%df" % ow._decimals) % value
+        painter.drawText(0, 0, w, h, QtCore.Qt.AlignCenter, txt)
+        painter.end()
 
-    def _fromSlider(self, tick):
-        return self._min + (self._max - self._min) * tick / 1000.0
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self._ow._dragging = True
+            self._ow._dragStartX = event.x()
+            self._ow._dragStartVal = self._ow._value
 
-    def _onSlider(self, tick):
-        self.valLabel.setText(("%%.%df" % self._decimals) % self._fromSlider(tick))
+    def mouseMoveEvent(self, event):
+        ow = self._ow
+        if not ow._dragging:
+            return
+        dx = event.x() - ow._dragStartX
+        w = float(self.width())
+        owsoftmax = ow._softMax
+        minim = ow._min
+        owmax = ow._max
+        base = ow._dragStartVal
+        def pxToDelta(px):
+            sign = 1.0 if px >= 0 else -1.0
+            apx = abs(px)
+            fineWidth = (owsoftmax - minim) * w
+            if apx <= fineWidth:
+                return sign * (apx / w) * (owsoftmax - minim)
+            else:
+                finePart = owsoftmax - minim
+                overPx = apx - fineWidth
+                t = overPx / w
+                overPart = t * t * (owmax - owsoftmax)
+                return sign * (finePart + overPart)
+        newVal = base + pxToDelta(dx)
+        newVal = max(minim, min(owmax, newVal))
+        ow._value = newVal
+        self.update()
+        ow._emitChanged()
 
-    def getValue(self): return self._fromSlider(self.slider.value())
-
-    def setValueSilent(self, val):
-        self.slider.blockSignals(True)
-        self.slider.setValue(self._toSlider(max(self._min, min(self._max, val))))
-        self.valLabel.setText(("%%.%df" % self._decimals) % val)
-        self.slider.blockSignals(False)
-
-    def setTip(self, text):
-        self.layout().itemAt(0).widget().setToolTip(text)
+    def mouseReleaseEvent(self, event):
+        self._ow._dragging = False
 
     # Lets you edit the sliders value by double clicking on it
-    def _startEdit(self):
-        edit = QtGui.QLineEdit(self.valLabel.text(), self.valLabel.parentWidget())
-        edit.setFixedWidth(46)
-        edit.setFixedHeight(20)
-        edit.setStyleSheet("font-size: 11px;")
-        edit.move(self.valLabel.mapTo(self.valLabel.parentWidget(), QtCore.QPoint(0, 0)))
+    def mouseDoubleClickEvent(self, event):
+        ow = self._ow
+        edit = QtGui.QLineEdit(("%%.%df" % ow._decimals) % ow._value, self.parentWidget())
+        edit.setFixedWidth(self.width())
+        edit.setFixedHeight(self.height())
+        edit.setStyleSheet("font-size: 11px; background: #1a1a1a; color: #ddd; border: 1px solid #555;")
+        edit.move(self.mapTo(self.parentWidget(), QtCore.QPoint(0, 0)))
         edit.show()
         edit.setFocus()
         edit.selectAll()
         def commit():
             try:
-                val = max(self._min, min(self._max, float(edit.text())))
-                self.slider.blockSignals(True)
-                self.slider.setValue(self._toSlider(val))
-                self.valLabel.setText(("%%.%df" % self._decimals) % val)
-                self.slider.blockSignals(False)
-                self.slider.valueChanged.emit(self.slider.value())
+                val = max(ow._min, min(ow._max, float(edit.text())))
+                ow._value = val
+                self.update()
+                ow._emitChanged()
             except Exception:
                 pass
             edit.deleteLater()
         edit.editingFinished.connect(commit)
         edit.focusOutEvent = lambda e: (commit(), QtGui.QLineEdit.focusOutEvent(edit, e))
 
+class PropertySliders(QtGui.QWidget):
+    valueChanged = QtCore.Signal(float)
+
+    def __init__(self, label, minVal, maxVal, defaultVal, decimals=2, parent=None):
+        super(PropertySliders, self).__init__(parent)
+        self._min = float(minVal)
+        self._max = 250.0
+        self._softMax = float(maxVal)
+        self._decimals = decimals
+        self._value = float(defaultVal)
+        self._dragging = False
+        self._dragStartX = 0
+        self._dragStartVal = 0.0
+        layout = QtGui.QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.setLayout(layout)
+        self._lbl = QtGui.QLabel(label)
+        self._lbl.setFixedWidth(130)
+        self._lbl.setStyleSheet("font-size: 11px;")
+        layout.addWidget(self._lbl)
+        self._bar = _BlenderBar(self)
+        layout.addWidget(self._bar)
+
+    def getValue(self): return self._value
+
+    def setValueSilent(self, val):
+        self._value = max(self._min, min(self._max, float(val)))
+        self._bar.update()
+
+    def setTip(self, text):
+        self._lbl.setToolTip(text)
+        self._bar.setToolTip(text)
+
     def connectChanged(self, fn):
-        self.slider.valueChanged.connect(lambda _: fn(self.getValue()))
+        self.valueChanged.connect(fn)
+
+    def _emitChanged(self):
+        self.valueChanged.emit(self._value)
 
 ## Collapsible sections for each propertty
 class CollapsibleSection(QtGui.QWidget):
@@ -402,15 +463,13 @@ class ColorWheelWindow(QtGui.QWidget):
         self.setMinimumHeight(420)
         self.setMaximumHeight(700)
 
-        # Window Title
-        title = QtGui.QLabel("Color Wheel")
-        title.setStyleSheet("font-size:15px; font-weight:bold;")
-        mainLayout.addWidget(title)
-
         # Show which light is selected or affected by the script
         lightName = animSet.GetName() if animSet else "None"
-        self.targetLabel = QtGui.QLabel("Editing: %s" % lightName)
-        self.targetLabel.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        self.targetTitle = QtGui.QLabel("Color Wheel")
+        self.targetTitle.setStyleSheet("font-size:14px; font-weight:bold;")
+        self.targetLabel = QtGui.QLabel("Editing: " + lightName)
+        self.targetLabel.setStyleSheet("font-size:11px;")
+        mainLayout.addWidget(self.targetTitle)
         mainLayout.addWidget(self.targetLabel)
 
         # Color wheel + colors intensity slider (brightness)
@@ -648,9 +707,16 @@ class ColorWheelWindow(QtGui.QWidget):
             return
 
         # Reads RGB from light and sends it to the Color Wheel and brightness slider
-        r = readChannelValue(a, "color_red", 1.0)
-        g = readChannelValue(a, "color_green", 1.0)
-        b = readChannelValue(a, "color_blue", 1.0)
+        time = getPlayheadTime()
+        def gv(ctrl, fb):
+            try:
+                ch = getChannel(a, ctrl)
+                if ch: return float(ch.log.GetValue(time))
+            except Exception: pass
+            return fb
+        r = gv("color_red", 1.0)
+        g = gv("color_green", 1.0)
+        b = gv("color_blue", 1.0)
         brightness = max(r, g, b, 0.001)
         nr = r / brightness
         ng = g / brightness
@@ -670,26 +736,26 @@ class ColorWheelWindow(QtGui.QWidget):
         self.brightnessSlider.setValue(self.brightnessScale)
 
         # Loads all property sliders
-        self.s_intensity.setValueSilent(readChannelValue(a, "intensity", 1.0))
-        self.s_radius.setValueSilent(readChannelValue(a, "radius", 1.0))
-        self.s_hFov.setValueSilent(readChannelValue(a, "horizontalFOV", 1.0))
-        self.s_vFov.setValueSilent(readChannelValue(a, "verticalFOV", 1.0))
-        self.s_shadowFilter.setValueSilent(readChannelValue(a, "shadowFilterSize", 1.0))
-        self.s_shadowAtten.setValueSilent(readChannelValue(a, "shadowAtten", 0.0))
-        self.s_shadowDepth.setValueSilent(readChannelValue(a, "shadowDepthBias", 0.0))
-        self.s_shadowSlope.setValueSilent(readChannelValue(a, "shadowSlopeScaleDepthBias", 1.0))
-        self.s_minDist.setValueSilent(readChannelValue(a, "minDistance", 0.0))
-        self.s_maxDist.setValueSilent(readChannelValue(a, "maxDistance", 1.0))
-        self.s_farZAtten.setValueSilent(readChannelValue(a, "farZAtten", 1.0))
-        self.s_constAtten.setValueSilent(readChannelValue(a, "constantAttenuation", 0.0))
-        self.s_linearAtten.setValueSilent(readChannelValue(a, "linearAttenuation", 0.0))
-        self.s_quadAtten.setValueSilent(readChannelValue(a, "quadraticAttenuation", 1.0))
-        self.s_volIntensity.setValueSilent(readChannelValue(a, "volumetricIntensity", 1.0))
-        self.s_noiseStr.setValueSilent(readChannelValue(a, "noiseStrength", 0.0))
-        self.s_width.setValueSilent(readChannelValue(a, "width", 1.0))
-        self.s_edgeWidth.setValueSilent(readChannelValue(a, "edgeWidth", 1.0))
-        self.s_height.setValueSilent(readChannelValue(a, "height", 1.0))
-        self.s_edgeHeight.setValueSilent(readChannelValue(a, "edgeHeight", 1.0))
+        self.s_intensity.setValueSilent(gv("intensity", 1.0))
+        self.s_radius.setValueSilent(gv("radius", 1.0))
+        self.s_hFov.setValueSilent(gv("horizontalFOV", 1.0))
+        self.s_vFov.setValueSilent(gv("verticalFOV", 1.0))
+        self.s_shadowFilter.setValueSilent(gv("shadowFilterSize", 1.0))
+        self.s_shadowAtten.setValueSilent(gv("shadowAtten", 0.0))
+        self.s_shadowDepth.setValueSilent(gv("shadowDepthBias", 0.0))
+        self.s_shadowSlope.setValueSilent(gv("shadowSlopeScaleDepthBias", 1.0))
+        self.s_minDist.setValueSilent(gv("minDistance", 0.0))
+        self.s_maxDist.setValueSilent(gv("maxDistance", 1.0))
+        self.s_farZAtten.setValueSilent(gv("farZAtten", 1.0))
+        self.s_constAtten.setValueSilent(gv("constantAttenuation", 0.0))
+        self.s_linearAtten.setValueSilent(gv("linearAttenuation", 0.0))
+        self.s_quadAtten.setValueSilent(gv("quadraticAttenuation", 1.0))
+        self.s_volIntensity.setValueSilent(gv("volumetricIntensity", 1.0))
+        self.s_noiseStr.setValueSilent(gv("noiseStrength", 0.0))
+        self.s_width.setValueSilent(gv("width", 1.0))
+        self.s_edgeWidth.setValueSilent(gv("edgeWidth", 1.0))
+        self.s_height.setValueSilent(gv("height", 1.0))
+        self.s_edgeHeight.setValueSilent(gv("edgeHeight", 1.0))
 
         # UberLight checkbox
         self.uberCheck.blockSignals(True)
