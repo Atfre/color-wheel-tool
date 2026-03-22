@@ -352,10 +352,10 @@ class _BlenderBar(QtGui.QWidget):
         try:
             ow = self._ow
             if not ow._dragging: return
-            dx   = event.x() - ow._dragStartX
-            w    = float(max(self.width(), 1))
+            dx = event.x() - ow._dragStartX
+            w = float(max(self.width(), 1))
             fine = (ow._softMax - ow._min) * w
-            apx  = abs(dx)
+            apx = abs(dx)
             sign = 1.0 if dx >= 0 else -1.0
             if apx <= fine:
                 delta = sign * (apx/w) * (ow._softMax - ow._min)
@@ -399,8 +399,8 @@ class PropertySliders(QtGui.QWidget):
 
     def __init__(self, label, minVal, maxVal, defaultVal, decimals=2, parent=None):
         super(PropertySliders, self).__init__(parent)
-        self._min     = float(minVal); self._max = 250.0; self._softMax = float(maxVal)
-        self._decimals = decimals;     self._value = float(defaultVal)
+        self._min = float(minVal); self._max = 250.0; self._softMax = float(maxVal)
+        self._decimals = decimals; self._value = float(defaultVal)
         self._dragging = False; self._dragStartX = 0; self._dragStartVal = 0.0
         self._ownerWindow = None
         lay = QtGui.QHBoxLayout(); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(4)
@@ -410,12 +410,12 @@ class PropertySliders(QtGui.QWidget):
         lay.addWidget(self._lbl)
         self._bar = _BlenderBar(self); lay.addWidget(self._bar)
 
-    def getValue(self):          return self._value
+    def getValue(self): return self._value
     def setValueSilent(self, v): self._value = max(self._min, min(self._max, float(v))); self._bar.update()
-    def setTip(self, t):         self._lbl.setToolTip(t); self._bar.setToolTip(t)
-    def connectChanged(self, fn):  self.valueChanged.connect(fn)
+    def setTip(self, t): self._lbl.setToolTip(t); self._bar.setToolTip(t)
+    def connectChanged(self, fn): self.valueChanged.connect(fn)
     def connectReleased(self, fn): self.valueReleased.connect(fn)
-    def _emitChanged(self):  self.valueChanged.emit(self._value)
+    def _emitChanged(self): self.valueChanged.emit(self._value)
     def _emitReleased(self): self.valueReleased.emit(self._value)
 
 # -- Collapsible sections --- #
@@ -468,13 +468,13 @@ class ColorWheelWindow(QtGui.QWidget):
         tr = QtGui.QHBoxLayout(); tr.setContentsMargins(0, 0, 0, 0); tr.setSpacing(4)
         lbl = QtGui.QLabel("Color Wheel"); lbl.setStyleSheet("font-size:14px;font-weight:bold;")
         tr.addWidget(lbl); tr.addStretch()
-        self.undoBtn = QtGui.QPushButton(u"\u21b6")
+        self.undoBtn = QtGui.QPushButton(u"<")
         self.undoBtn.setStyleSheet("font-size:13px;padding:2px 8px;")
-        self.undoBtn.setToolTip("Undo last change"); self.undoBtn.setEnabled(False)
+        self.undoBtn.setToolTip("Undo"); self.undoBtn.setEnabled(False)
         self.undoBtn.clicked.connect(self.onUndo)
-        self.redoBtn = QtGui.QPushButton(u"\u21b7")
+        self.redoBtn = QtGui.QPushButton(u">")
         self.redoBtn.setStyleSheet("font-size:13px;padding:2px 8px;")
-        self.redoBtn.setToolTip("Redo last undone change"); self.redoBtn.setEnabled(False)
+        self.redoBtn.setToolTip("Redo"); self.redoBtn.setEnabled(False)
         self.redoBtn.clicked.connect(self.onRedo)
         tr.addWidget(self.undoBtn); tr.addWidget(self.redoBtn)
         ml.addLayout(tr)
@@ -673,7 +673,7 @@ class ColorWheelWindow(QtGui.QWidget):
             a = self.targetAnimSet
             if a is None: return
             frame = sfmApp.GetHeadTimeInFrames()
-            t     = getPlayheadTime()
+            t = getPlayheadTime()
             snap  = {}
             for name in _CTRL_NAMES:
                 ch = getChannel(a, name)
