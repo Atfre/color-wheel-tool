@@ -1,206 +1,261 @@
-# [SFM] Color Wheel Tool
+#===================================================================================== #
+# [SFM] Color Wheel Tool v1.2.0
 #
-# This script adds a Color Wheel + lighting properties system to the rigs section of your lights
-# in Source Filmmaker, allowing you to change light colors and other settings from there instead 
-# of relying on SFM's default RGB sliders.
+#   This script adds a Color Wheel system and more lighting properties to the "rigs" 
+# section of your lights in Source Filmmaker, letting you modify light settings in a 
+# more intuitive way instead of relying on SFM's default sliders.
+#
+# Credits:
+# Script based off Fames, msu355, and an0nymooose for fixes and implementations.
+# HEX code idea by Dani3D
+# Sliders remapping idea by Higglemug McGiggletoot.
+#
+# Early testing and feedback:
+# - Bone
+# - Cuori
+# - HyperBlender
+# - Shydo
+# - Trap & Hat
 #
 # Author: Aftre
-#
-# Script inspired by Fames, msu355, and an0nymooose (fixes & implementations)
-# HEX Code idea by Dani3D
-# Early testing and feedback: Bone, Cuori, HyperBlender, Shydo and Trap & Hat
+# ===================================================================================== #
 
 import math, sfm, sfmUtils, vs, sfmApp, vsUtils
 from vs import g_pDataModel as dm
 from PySide import QtGui, QtCore
 
-ProductName = "Color Wheel"
+ProductName = "Color Wheel v1.2.0"
 InternalName = "color_wheel"
 
+# -- Global undo/redo actions --- #
+g_undo_active = False
+g_undo_stack  = []
+g_redo_stack  = []
+g_max_undo_steps = 50
+
+# -- Channels names --- #
+_CTRL_NAMES = (
+    "color_red",
+    "color_green",
+    "color_blue",
+    "intensity",
+    "radius",
+    "horizontalFOV",
+    "verticalFOV",
+    "shadowFilterSize",
+    "shadowAtten",
+    "shadowDepthBias",
+    "shadowSlopeScaleDepthBias",
+    "minDistance",
+    "maxDistance",
+    "farZAtten",
+    "constantAttenuation",
+    "linearAttenuation",
+    "quadraticAttenuation",
+    "volumetricIntensity",
+    "noiseStrength",
+    "width",
+    "edgeWidth",
+    "height",
+    "edgeHeight",
+)
+
+# -- Booleans names --- #
+_BOOL_NAMES = (
+    "castsShadows",
+    "volumetric",
+    "uberlight"
+)
+
+# -- Gets the channel of a property by its name --- #
 def getChannel(animSet, controlName):
     try:
         rootGroup = animSet.GetRootControlGroup()
-        if rootGroup is None:
-            return None
+        if rootGroup is None: return None
         ctrl = rootGroup.FindControlByName(controlName, True)
-        if ctrl is None:
-            return None
-        return ctrl.channel
-    except Exception as e:
-        return None
+        return ctrl.channel if ctrl else None
+    except Exception: return None
 
 def getPlayheadTime():
-    return vs.DmeTime_t(((1.0 / sfmApp.GetFramesPerSecond()) * sfmApp.GetHeadTimeInFrames()) + 5.0)
+    try:
+        return vs.DmeTime_t(((1.0 / sfmApp.GetFramesPerSecond()) * sfmApp.GetHeadTimeInFrames()) + 5.0)
+    except Exception: return vs.DmeTime_t(5.0)
 
-# In Graph Editor inserts or overwrites a single keyframe at the playhead position
-# In Motion and Clip Editors overwrites every existing keyframe
+# -- Writes values on keyframes depending on which timeline-editor you are (Clip, Motion or Graph Editors) --- #
 def setChannelAllKeys(channel, value):
     try:
         layer = channel.log.GetLayer(0)
         count = layer.GetKeyCount()
-        timelineMode = sfmApp.GetTimelineMode()
-        inGraphEditor = timelineMode == 4
-        if inGraphEditor:
+        if sfmApp.GetTimelineMode() == 4:
             time = getPlayheadTime()
             if count == 0:
-                # If there's no keys, then inserts one affecting the whole timeline
-                channel.log.InsertKey(vs.DmeTime_t(0), value, 3)
+                channel.log.InsertKey(vs.DmeTime_t(0), value, 0)
                 layer.values[0] = value
-            existing = channel.log.FindKeyWithinTolerance(time, vs.DmeTime_t(1))
-            if existing >= 0:
-                layer.values[existing] = value
             else:
-                channel.log.AddBookmark(time, 0)
-                index = channel.log.InsertKey(time, value, 3)
-                layer.values[index] = value
+                idx = channel.log.FindKeyWithinTolerance(time, vs.DmeTime_t(1))
+                if idx >= 0:
+                    layer.values[idx] = value
+                else:
+                    i = channel.log.InsertKey(time, value, 0)
+                    layer.values[i] = value
+                    channel.log.AddBookmark(time, 0)
         elif count == 0:
-            # If there's no keys, then inserts one affecting the whole timeline
-            channel.log.InsertKey(vs.DmeTime_t(0), value, 3)
+            channel.log.InsertKey(vs.DmeTime_t(0), value, 0)
             layer.values[0] = value
         else:
             for i in range(count): layer.values[i] = value
         return True
-    except Exception as e:
-        return False
+    except Exception: return False
 
-# Applies RGB values to the light color channels
-def applyLightColor(animSet, r, g, b):
-    if animSet is None:
-        return
-    chR = getChannel(animSet, "color_red")
-    chG = getChannel(animSet, "color_green")
-    chB = getChannel(animSet, "color_blue")
-    if not chR or not chG or not chB:
-        return
-    dm.StartUndo("ColorWheel", "ColorWheel", 0)
-    setChannelAllKeys(chR, r)
-    setChannelAllKeys(chG, g)
-    setChannelAllKeys(chB, b)
-    dm.FinishUndo()
-    sfmApp.SetHeadTimeInFrames(sfmApp.GetHeadTimeInFrames())
+# -- Applies the RGB values into their respective channels --- #
+def applyLightColor(animSet, r, g, b, finalize=True):
+    global g_undo_active
+    try:
+        if animSet is None: return
+        chR = getChannel(animSet, "color_red")
+        chG = getChannel(animSet, "color_green")
+        chB = getChannel(animSet, "color_blue")
+        if not chR or not chG or not chB: return
+        if not g_undo_active:
+            dm.StartUndo("ColorWheel", "ColorChange", 0)
+            g_undo_active = True
+        setChannelAllKeys(chR, r); setChannelAllKeys(chG, g); setChannelAllKeys(chB, b)
+        if finalize:
+            dm.FinishUndo(); g_undo_active = False
+        sfmApp.SetHeadTimeInFrames(sfmApp.GetHeadTimeInFrames())
+    except Exception:
+        if g_undo_active:
+            try: dm.FinishUndo()
+            except Exception: pass
+            g_undo_active = False
 
-def applyControlValue(animSet, controlName, value):
-    ch = getChannel(animSet, controlName)
-    if ch is None:
-        return
-    dm.StartUndo("ColorWheel", "ColorWheel", 0)
-    setChannelAllKeys(ch, value)
-    dm.FinishUndo()
-    sfmApp.SetHeadTimeInFrames(sfmApp.GetHeadTimeInFrames())
+# -- Applies other property values into their respective channels --- #
+def applyControlValue(animSet, controlName, value, finalize=True):
+    global g_undo_active
+    try:
+        ch = getChannel(animSet, controlName)
+        if ch is None: return
+        if not g_undo_active:
+            dm.StartUndo("ColorWheel", "ValueChange", 0)
+            g_undo_active = True
+        setChannelAllKeys(ch, value)
+        if finalize:
+            dm.FinishUndo(); g_undo_active = False
+        sfmApp.SetHeadTimeInFrames(sfmApp.GetHeadTimeInFrames())
+    except Exception:
+        if g_undo_active:
+            try: dm.FinishUndo()
+            except Exception: pass
+            g_undo_active = False
 
+# -- Applies boolean property values into their respective channels --- #
 def applyBoolValue(animSet, controlName, value):
     try:
-        lightElem = animSet.light
-        if lightElem is None:
-            return
-        dm.StartUndo("ColorWheel", "ColorWheel", 0)
-        lightElem.SetValue(controlName, value)
+        if animSet.light is None: return
+        dm.StartUndo("ColorWheel", "BoolChange", 0)
+        animSet.light.SetValue(controlName, value)
         dm.FinishUndo()
         sfmApp.SetHeadTimeInFrames(sfmApp.GetHeadTimeInFrames())
-    except Exception as e:
-        pass
+    except Exception: pass
 
+# -- Reads the value of a property's channel --- #
 def readChannelValue(animSet, controlName, fallback=0.0):
     try:
         ch = getChannel(animSet, controlName)
-        if ch is None:
-            return fallback
+        if ch is None: return fallback
         layer = ch.log.GetLayer(0)
-        if layer.GetKeyCount() == 0:
-            return fallback
+        if layer.GetKeyCount() == 0: return fallback
+        try:
+            v = float(ch.log.GetValue(getPlayheadTime()))
+            if v != 0.0: return v
+        except Exception: pass
         return float(layer.values[0])
-    except Exception:
-        return fallback
+    except Exception: return fallback
 
+# -- Reads the value of a boolean property's channel --- #
 def readBoolValue(animSet, controlName, fallback=False):
     try:
-        lightElem = animSet.light
-        if lightElem is None:
-            return fallback
-        return bool(lightElem.GetValue(controlName))
-    except Exception:
-        return fallback
+        if animSet.light is None: return fallback
+        return bool(animSet.light.GetValue(controlName))
+    except Exception: return fallback
 
-##  Color Wheel thing
+# == Color Wheel Widget === #
 class COLORWheel(QtGui.QWidget):
-    colorChanged = QtCore.Signal(QtGui.QColor)
+    colorChanged  = QtCore.Signal(QtGui.QColor)
+    colorReleased = QtCore.Signal(QtGui.QColor)
 
     def __init__(self):
         super(COLORWheel, self).__init__()
-        self.setMinimumSize(220, 220)
-        self.setMaximumSize(220, 220)
+        self.setMinimumSize(220, 220); self.setMaximumSize(220, 220)
         self._radius = 106
         self._selectorPos = QtCore.QPoint(110, 110)
-        self._cachedWheel = None
-        self._generateWheel()
-
-        # System to avoid lagging SFM and making it explode or something
-        self._applyTimer = QtCore.QTimer(self)
-        self._applyTimer.setSingleShot(True)
-        self._applyTimer.setInterval(40)
         self._pendingColor = None
+        self._ownerWindow  = None
+        self._generateWheel()
+        self._applyTimer = QtCore.QTimer(self)
+        self._applyTimer.setSingleShot(True); self._applyTimer.setInterval(40)
         self._applyTimer.timeout.connect(self._emitPending)
 
     def _generateWheel(self):
-        size = self._radius * 2
-        image = QtGui.QImage(size, size, QtGui.QImage.Format_RGB32)
-        cx = cy = self._radius
-        for y in range(size):
-            for x in range(size):
-                dx, dy = x - cx, y - cy
+        r = self._radius
+        img = QtGui.QImage(r*2, r*2, QtGui.QImage.Format_RGB32)
+        bg = QtGui.QColor(40, 40, 40).rgb()
+        for y in range(r*2):
+            for x in range(r*2):
+                dx, dy = x-r, y-r
                 dist = math.sqrt(dx*dx + dy*dy)
-                if dist <= self._radius:
-                    # Blender layout
+                if dist <= r:
                     angle = math.degrees(math.atan2(-dx, dy))
                     if angle < 0: angle += 360
-                    sat = dist / self._radius
                     c = QtGui.QColor()
-                    # 90% desaturation to make it similar to SFMs desaturated colors [REMOVED]
-                    c.setHsv(int(angle), int(sat * 255 * 1), 255)
-                    image.setPixel(x, y, c.rgb())
+                    c.setHsv(int(angle), int(dist/r*255), 255)
+                    img.setPixel(x, y, c.rgb())
                 else:
-                    image.setPixel(x, y, QtGui.QColor(40, 40, 40).rgb())
-        self._cachedWheel = QtGui.QPixmap.fromImage(image)
+                    img.setPixel(x, y, bg)
+        self._cachedWheel = QtGui.QPixmap.fromImage(img)
 
     def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        ox = (self.width() - self._radius * 2) / 2
-        oy = (self.height() - self._radius * 2) / 2
-        painter.drawPixmap(ox, oy, self._cachedWheel)
-        sx, sy = self._selectorPos.x(), self._selectorPos.y()
-        painter.setPen(QtGui.QPen(QtCore.Qt.white, 2))
-        painter.setBrush(QtCore.Qt.NoBrush)
-        painter.drawEllipse(QtCore.QPoint(sx, sy), 7, 7)
-        painter.setPen(QtGui.QPen(QtCore.Qt.black, 1))
-        painter.drawEllipse(QtCore.QPoint(sx, sy), 9, 9)
+        try:
+            p = QtGui.QPainter(self)
+            p.setRenderHint(QtGui.QPainter.Antialiasing)
+            r = self._radius
+            p.drawPixmap((self.width()-r*2)//2, (self.height()-r*2)//2, self._cachedWheel)
+            sp = self._selectorPos
+            p.setPen(QtGui.QPen(QtCore.Qt.white, 2)); p.setBrush(QtCore.Qt.NoBrush)
+            p.drawEllipse(sp, 7, 7)
+            p.setPen(QtGui.QPen(QtCore.Qt.black, 1))
+            p.drawEllipse(sp, 9, 9)
+        except Exception: pass
 
-    def mousePressEvent(self, event): self._pick(event.pos())
+    def mousePressEvent(self, event):
+        if self._ownerWindow: self._ownerWindow._capturePre()
+        self._pick(event.pos())
+
     def mouseMoveEvent(self, event):
-        if event.buttons() & QtCore.Qt.LeftButton:
-            self._pick(event.pos())
+        if event.buttons() & QtCore.Qt.LeftButton: self._pick(event.pos())
+
+    def mouseReleaseEvent(self, event):
+        if self._pendingColor is not None: self.colorReleased.emit(self._pendingColor)
+        if self._ownerWindow: self._ownerWindow._pushUndo()
 
     def _pick(self, pos):
-        cx, cy = self.width() / 2, self.height() / 2
-        dx, dy = pos.x() - cx, pos.y() - cy
-        dist = math.sqrt(dx*dx + dy*dy)
-        if dist > self._radius:
-            angle = math.atan2(dy, dx)
-            dx = math.cos(angle) * self._radius
-            dy = math.sin(angle) * self._radius
-            dist = self._radius
-        self._selectorPos = QtCore.QPoint(int(cx + dx), int(cy + dy))
-        self.update()
-
-        # Blender layout
-        angle_deg = math.degrees(math.atan2(-dx, dy))
-        if angle_deg < 0: angle_deg += 360
-        sat = min(dist / self._radius, 1.0)
-        color = QtGui.QColor()
-        color.setHsv(int(angle_deg), int(sat * 255), 255)
-        self._pendingColor = color
-        if not self._applyTimer.isActive():
-            self._applyTimer.start()
+        try:
+            cx, cy = self.width()/2.0, self.height()/2.0
+            dx, dy = pos.x()-cx, pos.y()-cy
+            dist = math.sqrt(dx*dx + dy*dy)
+            if dist > self._radius:
+                a = math.atan2(dy, dx)
+                dx, dy = math.cos(a)*self._radius, math.sin(a)*self._radius
+                dist = self._radius
+            self._selectorPos = QtCore.QPoint(int(cx+dx), int(cy+dy))
+            self.update()
+            angle_deg = math.degrees(math.atan2(-dx, dy))
+            if angle_deg < 0: angle_deg += 360
+            c = QtGui.QColor()
+            c.setHsv(int(angle_deg), int(min(dist/self._radius, 1.0)*255), 255)
+            self._pendingColor = c
+            if not self._applyTimer.isActive(): self._applyTimer.start()
+        except Exception: pass
 
     def _emitPending(self):
         if self._pendingColor is not None:
@@ -208,238 +263,183 @@ class COLORWheel(QtGui.QWidget):
             self._pendingColor = None
 
     def setSelectorFromColor(self, color):
-        h, s, v, _ = color.getHsv()
-        if s == 0:
-            self._selectorPos = QtCore.QPoint(self._radius, self._radius)
+        try:
+            h, s, v, _ = color.getHsv()
+            cx, cy = self.width()/2.0, self.height()/2.0
+            if s == 0:
+                self._selectorPos = QtCore.QPoint(int(cx), int(cy))
+            else:
+                d = (s/255.0)*self._radius
+                self._selectorPos = QtCore.QPoint(
+                    int(cx - math.sin(math.radians(h))*d),
+                    int(cy + math.cos(math.radians(h))*d))
             self.update()
-            return
-        angle_rad = math.atan2(
-            -math.cos(math.radians(h)),
-             math.sin(math.radians(h))
-        )
-        sat_dist = (s / 255.0) * self._radius
-        cx, cy = self.width() / 2, self.height() / 2
-        dx = -math.sin(math.radians(h)) * sat_dist
-        dy =  math.cos(math.radians(h)) * sat_dist
-        self._selectorPos = QtCore.QPoint(int(cx + dx), int(cy + dy))
-        self.update()
+        except Exception: pass
 
-## Brightness Slider
-# Vertical color brightness slider
+# -- Brightness Slider --- #
 class BrightnessSlider(QtGui.QWidget):
-    valueChanged = QtCore.Signal(float)
+    valueChanged  = QtCore.Signal(float)
+    valueReleased = QtCore.Signal(float)
 
     def __init__(self, parent=None):
         super(BrightnessSlider, self).__init__(parent)
-        self.setFixedWidth(18)
-        self.setMinimumHeight(220)
-        self._value = 1.0
-        self._dragging = False
+        self.setFixedWidth(18); self.setMinimumHeight(220)
+        self._value = 1.0; self._dragging = False; self._ownerWindow = None
 
     def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        gradient = QtGui.QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0.0, QtGui.QColor(255, 255, 255))
-        gradient.setColorAt(1.0, QtGui.QColor(0, 0, 0))
-        painter.fillRect(self.rect(), QtGui.QBrush(gradient))
-        y = int((1.0 - self._value) * self.height())
-        painter.setPen(QtGui.QPen(QtCore.Qt.white, 2))
-        painter.drawLine(0, y, self.width(), y)
-        painter.setPen(QtGui.QPen(QtCore.Qt.black, 1))
-        painter.drawLine(0, y+2, self.width(), y+2)
+        try:
+            p = QtGui.QPainter(self)
+            grad = QtGui.QLinearGradient(0, 0, 0, self.height())
+            grad.setColorAt(0.0, QtGui.QColor(255, 255, 255))
+            grad.setColorAt(1.0, QtGui.QColor(0, 0, 0))
+            p.fillRect(self.rect(), QtGui.QBrush(grad))
+            y = int((1.0-self._value)*self.height())
+            p.setPen(QtGui.QPen(QtCore.Qt.white, 2)); p.drawLine(0, y, self.width(), y)
+            p.setPen(QtGui.QPen(QtCore.Qt.black, 1)); p.drawLine(0, y+2, self.width(), y+2)
+        except Exception: pass
 
     def mousePressEvent(self, event):
         self._dragging = True
-        self._updateValue(event.pos().y())
+        if self._ownerWindow: self._ownerWindow._capturePre()
+        self._set(event.pos().y())
 
     def mouseMoveEvent(self, event):
-        if self._dragging: self._updateValue(event.pos().y())
+        if self._dragging: self._set(event.pos().y())
 
-    def mouseReleaseEvent(self, event): self._dragging = False
+    def mouseReleaseEvent(self, event):
+        self._dragging = False
+        self.valueReleased.emit(self._value)
+        if self._ownerWindow: self._ownerWindow._pushUndo()
 
-    def _updateValue(self, y):
-        self._value = 1.0 - max(0.0, min(1.0, float(y) / self.height()))
-        self.update()
-        self.valueChanged.emit(self._value)
+    def _set(self, y):
+        self._value = 1.0 - max(0.0, min(1.0, float(y)/self.height()))
+        self.update(); self.valueChanged.emit(self._value)
 
-    def setValue(self, v):
-        self._value = max(0.0, min(1.0, v))
-        self.update()
-
+    def setValue(self, v): self._value = max(0.0, min(1.0, v)); self.update()
     def getValue(self): return self._value
 
-## Property Sliders
-# Blender-style drag slider. A rectangle that you can drag left to right
-# The sensibility increases depending on how further you drag the bar
-# Double-click to type a value directly
+# -- Blender-styled slider bar --- #
 class _BlenderBar(QtGui.QWidget):
     def __init__(self, ow):
         super(_BlenderBar, self).__init__(ow)
         self._ow = ow
-        self.setFixedHeight(18)
-        self.setMinimumWidth(80)
+        self.setFixedHeight(18); self.setMinimumWidth(80)
         self.setCursor(QtCore.Qt.SizeHorCursor)
 
     def paintEvent(self, event):
-        ow = self._ow
-        value = ow._value
-        owmax = ow._max
-        owsoftmax = ow._softMax
-        minim = ow._min
-        painter = QtGui.QPainter(self)
-        w, h = self.width(), self.height()
-        painter.fillRect(0, 0, w, h, QtGui.QColor(45, 45, 45))
-        frac = max(0.0, min(1.0, (value - minim) / (owsoftmax - minim)))
-        fillW = int(frac * w)
-        if fillW > 0:
-            painter.fillRect(0, 0, fillW, h, QtGui.QColor(60, 90, 120, 180))
-        painter.setPen(QtGui.QPen(QtGui.QColor(220, 220, 220)))
-        font = painter.font()
-        font.setPointSize(8)
-        painter.setFont(font)
-        txt = ("%%.%df" % ow._decimals) % value
-        painter.drawText(0, 0, w, h, QtCore.Qt.AlignCenter, txt)
-        painter.end()
+        try:
+            ow = self._ow
+            p  = QtGui.QPainter(self)
+            w, h = self.width(), self.height()
+            p.fillRect(0, 0, w, h, QtGui.QColor(45, 45, 45))
+            frac = max(0.0, min(1.0, (ow._value-ow._min)/(ow._softMax-ow._min)))
+            if frac > 0:
+                p.fillRect(0, 0, int(frac*w), h, QtGui.QColor(60, 90, 120, 180))
+            p.setPen(QtGui.QPen(QtGui.QColor(220, 220, 220)))
+            f = p.font(); f.setPointSize(8); p.setFont(f)
+            p.drawText(0, 0, w, h, QtCore.Qt.AlignCenter, ("%%.%df" % ow._decimals) % ow._value)
+            p.end()
+        except Exception: pass
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
-            self._ow._dragging = True
-            self._ow._dragStartX = event.x()
-            self._ow._dragStartVal = self._ow._value
+            ow = self._ow
+            ow._dragging = True; ow._dragStartX = event.x(); ow._dragStartVal = ow._value
+            win = getattr(ow, "_ownerWindow", None)
+            if win: win._capturePre()
 
     def mouseMoveEvent(self, event):
-        ow = self._ow
-        if not ow._dragging:
-            return
-        dx = event.x() - ow._dragStartX
-        w = float(self.width())
-        owsoftmax = ow._softMax
-        minim = ow._min
-        owmax = ow._max
-        base = ow._dragStartVal
-        def pxToDelta(px):
-            sign = 1.0 if px >= 0 else -1.0
-            apx = abs(px)
-            fineWidth = (owsoftmax - minim) * w
-            if apx <= fineWidth:
-                return sign * (apx / w) * (owsoftmax - minim)
+        try:
+            ow = self._ow
+            if not ow._dragging: return
+            dx   = event.x() - ow._dragStartX
+            w    = float(max(self.width(), 1))
+            fine = (ow._softMax - ow._min) * w
+            apx  = abs(dx)
+            sign = 1.0 if dx >= 0 else -1.0
+            if apx <= fine:
+                delta = sign * (apx/w) * (ow._softMax - ow._min)
             else:
-                finePart = owsoftmax - minim
-                overPx = apx - fineWidth
-                t = overPx / w
-                overPart = t * t * (owmax - owsoftmax)
-                return sign * (finePart + overPart)
-        newVal = base + pxToDelta(dx)
-        newVal = max(minim, min(owmax, newVal))
-        ow._value = newVal
-        self.update()
-        ow._emitChanged()
+                t = (apx - fine) / w
+                delta = sign * ((ow._softMax - ow._min) + t*t*(ow._max - ow._softMax))
+            ow._value = max(ow._min, min(ow._max, ow._dragStartVal + delta))
+            self.update(); ow._emitChanged()
+        except Exception: pass
 
     def mouseReleaseEvent(self, event):
-        self._ow._dragging = False
+        self._ow._dragging = False; self._ow._emitReleased()
+        win = getattr(self._ow, "_ownerWindow", None)
+        if win: win._pushUndo()
 
-    # Lets you edit the sliders value by double clicking on it
     def mouseDoubleClickEvent(self, event):
-        ow = self._ow
-        edit = QtGui.QLineEdit(("%%.%df" % ow._decimals) % ow._value, self.parentWidget())
-        edit.setFixedWidth(self.width())
-        edit.setFixedHeight(self.height())
-        edit.setStyleSheet("font-size: 11px; background: #1a1a1a; color: #ddd; border: 1px solid #555;")
-        edit.move(self.mapTo(self.parentWidget(), QtCore.QPoint(0, 0)))
-        edit.show()
-        edit.setFocus()
-        edit.selectAll()
-        def commit():
-            try:
-                val = max(ow._min, min(ow._max, float(edit.text())))
-                ow._value = val
-                self.update()
-                ow._emitChanged()
-            except Exception:
-                pass
-            edit.deleteLater()
-        edit.editingFinished.connect(commit)
-        edit.focusOutEvent = lambda e: (commit(), QtGui.QLineEdit.focusOutEvent(edit, e))
+        try:
+            ow  = self._ow
+            win = getattr(ow, "_ownerWindow", None)
+            if win: win._capturePre()
+            edit = QtGui.QLineEdit(("%%.%df" % ow._decimals) % ow._value, self.parentWidget())
+            edit.setFixedWidth(self.width()); edit.setFixedHeight(self.height())
+            edit.setStyleSheet("font-size:11px;background:#1a1a1a;color:#ddd;border:1px solid #555;")
+            edit.move(self.mapTo(self.parentWidget(), QtCore.QPoint(0, 0)))
+            edit.show(); edit.setFocus(); edit.selectAll()
+            def commit():
+                try:
+                    ow._value = max(ow._min, min(ow._max, float(edit.text())))
+                    self.update(); ow._emitChanged(); ow._emitReleased()
+                    if win: win._pushUndo()
+                except Exception: pass
+                edit.deleteLater()
+            edit.editingFinished.connect(commit)
+            edit.focusOutEvent = lambda e: (commit(), QtGui.QLineEdit.focusOutEvent(edit, e))
+        except Exception: pass
 
+# -- Property slider (label + bar) --- #
 class PropertySliders(QtGui.QWidget):
-    valueChanged = QtCore.Signal(float)
+    valueChanged  = QtCore.Signal(float)
+    valueReleased = QtCore.Signal(float)
 
     def __init__(self, label, minVal, maxVal, defaultVal, decimals=2, parent=None):
         super(PropertySliders, self).__init__(parent)
-        self._min = float(minVal)
-        self._max = 250.0
-        self._softMax = float(maxVal)
-        self._decimals = decimals
-        self._value = float(defaultVal)
-        self._dragging = False
-        self._dragStartX = 0
-        self._dragStartVal = 0.0
-        layout = QtGui.QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        self.setLayout(layout)
+        self._min     = float(minVal); self._max = 250.0; self._softMax = float(maxVal)
+        self._decimals = decimals;     self._value = float(defaultVal)
+        self._dragging = False; self._dragStartX = 0; self._dragStartVal = 0.0
+        self._ownerWindow = None
+        lay = QtGui.QHBoxLayout(); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(4)
+        self.setLayout(lay)
         self._lbl = QtGui.QLabel(label)
-        self._lbl.setFixedWidth(130)
-        self._lbl.setStyleSheet("font-size: 11px;")
-        layout.addWidget(self._lbl)
-        self._bar = _BlenderBar(self)
-        layout.addWidget(self._bar)
+        self._lbl.setFixedWidth(130); self._lbl.setStyleSheet("font-size:11px;")
+        lay.addWidget(self._lbl)
+        self._bar = _BlenderBar(self); lay.addWidget(self._bar)
 
-    def getValue(self): return self._value
+    def getValue(self):          return self._value
+    def setValueSilent(self, v): self._value = max(self._min, min(self._max, float(v))); self._bar.update()
+    def setTip(self, t):         self._lbl.setToolTip(t); self._bar.setToolTip(t)
+    def connectChanged(self, fn):  self.valueChanged.connect(fn)
+    def connectReleased(self, fn): self.valueReleased.connect(fn)
+    def _emitChanged(self):  self.valueChanged.emit(self._value)
+    def _emitReleased(self): self.valueReleased.emit(self._value)
 
-    def setValueSilent(self, val):
-        self._value = max(self._min, min(self._max, float(val)))
-        self._bar.update()
-
-    def setTip(self, text):
-        self._lbl.setToolTip(text)
-        self._bar.setToolTip(text)
-
-    def connectChanged(self, fn):
-        self.valueChanged.connect(fn)
-
-    def _emitChanged(self):
-        self.valueChanged.emit(self._value)
-
-## Collapsible sections for each propertty
+# -- Collapsible sections --- #
 class CollapsibleSection(QtGui.QWidget):
     def __init__(self, title, parent=None):
         super(CollapsibleSection, self).__init__(parent)
         self._title = title
-        self._layout = QtGui.QVBoxLayout()
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(2)
-        self.setLayout(self._layout)
+        vl = QtGui.QVBoxLayout(); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(2)
+        self.setLayout(vl)
         self._btn = QtGui.QPushButton("[+] " + title)
-        self._btn.setStyleSheet("text-align: left; font-size: 11px; font-weight: bold; padding: 2px;")
-        self._btn.setFlat(True)
-        self._btn.clicked.connect(self._toggle)
-        self._layout.addWidget(self._btn)
+        self._btn.setStyleSheet("text-align:left;font-size:11px;font-weight:bold;padding:2px;")
+        self._btn.setFlat(True); self._btn.clicked.connect(self._toggle); vl.addWidget(self._btn)
         self._body = QtGui.QWidget()
         self._bodyLayout = QtGui.QVBoxLayout()
-        self._bodyLayout.setContentsMargins(8, 0, 0, 4)
-        self._bodyLayout.setSpacing(2)
-        self._body.setLayout(self._bodyLayout)
-        self._body.setVisible(False)
-        self._layout.addWidget(self._body)
+        self._bodyLayout.setContentsMargins(8, 0, 0, 4); self._bodyLayout.setSpacing(2)
+        self._body.setLayout(self._bodyLayout); self._body.setVisible(False); vl.addWidget(self._body)
 
     def _toggle(self):
-        visible = not self._body.isVisible()
-        self._body.setVisible(visible)
-        self._btn.setText(("[-] " if visible else "[+] ") + self._title)
+        v = not self._body.isVisible(); self._body.setVisible(v)
+        self._btn.setText(("[-] " if v else "[+] ") + self._title)
 
     def addWidget(self, w): self._bodyLayout.addWidget(w)
 
-    def addRow(self, *widgets):
-        row = QtGui.QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        for w in widgets: row.addWidget(w)
-        self._bodyLayout.addLayout(row)
-
-## Main Window
-# Window Code meow
+# -- Main window --- #
 class ColorWheelWindow(QtGui.QWidget):
     def __init__(self, animSet):
         super(ColorWheelWindow, self).__init__()
@@ -447,379 +447,394 @@ class ColorWheelWindow(QtGui.QWidget):
         self.setWindowTitle(ProductName)
         self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
         self.setFixedWidth(340)
-        scroll = QtGui.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+
         inner = QtGui.QWidget()
-        mainLayout = QtGui.QVBoxLayout()
-        mainLayout.setSpacing(4)
-        mainLayout.setContentsMargins(8, 8, 8, 8)
-        inner.setLayout(mainLayout)
+        self._ml = QtGui.QVBoxLayout(); self._ml.setSpacing(4); self._ml.setContentsMargins(8, 8, 8, 8)
+        inner.setLayout(self._ml)
+        scroll = QtGui.QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         scroll.setWidget(inner)
-        outerLayout = QtGui.QVBoxLayout()
-        outerLayout.setContentsMargins(0, 0, 0, 0)
-        outerLayout.addWidget(scroll)
-        self.setLayout(outerLayout)
-        self.setMinimumHeight(420)
-        self.setMaximumHeight(700)
+        outer = QtGui.QVBoxLayout(); outer.setContentsMargins(0, 0, 0, 0); outer.addWidget(scroll)
+        self.setLayout(outer)
+        self.setMinimumHeight(420); self.setMaximumHeight(700)
 
-        # Show which light is selected or affected by the script
+        pos = QtCore.QSettings("Aftre", "ColorWheel").value("windowPos")
+        if pos: self.move(pos)
+
+        ml = self._ml
         lightName = animSet.GetName() if animSet else "None"
-        self.targetTitle = QtGui.QLabel("Color Wheel")
-        self.targetTitle.setStyleSheet("font-size:14px; font-weight:bold;")
-        self.targetLabel = QtGui.QLabel("Editing: " + lightName)
-        self.targetLabel.setStyleSheet("font-size:11px;")
-        mainLayout.addWidget(self.targetTitle)
-        mainLayout.addWidget(self.targetLabel)
 
-        # Color wheel + colors intensity slider (brightness)
-        wheelRow = QtGui.QHBoxLayout()
-        wheelRow.setSpacing(6)
-        self.wheel = COLORWheel()
+        # -- Title + undo/redo --- #
+        tr = QtGui.QHBoxLayout(); tr.setContentsMargins(0, 0, 0, 0); tr.setSpacing(4)
+        lbl = QtGui.QLabel("Color Wheel"); lbl.setStyleSheet("font-size:14px;font-weight:bold;")
+        tr.addWidget(lbl); tr.addStretch()
+        self.undoBtn = QtGui.QPushButton(u"\u21b6")
+        self.undoBtn.setStyleSheet("font-size:13px;padding:2px 8px;")
+        self.undoBtn.setToolTip("Undo last change"); self.undoBtn.setEnabled(False)
+        self.undoBtn.clicked.connect(self.onUndo)
+        self.redoBtn = QtGui.QPushButton(u"\u21b7")
+        self.redoBtn.setStyleSheet("font-size:13px;padding:2px 8px;")
+        self.redoBtn.setToolTip("Redo last undone change"); self.redoBtn.setEnabled(False)
+        self.redoBtn.clicked.connect(self.onRedo)
+        tr.addWidget(self.undoBtn); tr.addWidget(self.redoBtn)
+        ml.addLayout(tr)
+        ml.addWidget(QtGui.QLabel("Editing: " + lightName))
+
+        # -- Color wheel + brightness slider --- #
+        wr = QtGui.QHBoxLayout(); wr.setSpacing(6)
+        self.wheel = COLORWheel(); self.wheel._ownerWindow = self
         self.wheel.colorChanged.connect(self.onColorChanged)
-        wheelRow.addWidget(self.wheel)
-        self.brightnessSlider = BrightnessSlider()
+        self.wheel.colorReleased.connect(self.onColorReleased)
+        wr.addWidget(self.wheel)
+        self.brightnessSlider = BrightnessSlider(); self.brightnessSlider._ownerWindow = self
         self.brightnessSlider.valueChanged.connect(self.onIntensityChanged)
-        wheelRow.addWidget(self.brightnessSlider, alignment=QtCore.Qt.AlignVCenter)
-        mainLayout.addLayout(wheelRow)
+        self.brightnessSlider.valueReleased.connect(self.onIntensityReleased)
+        wr.addWidget(self.brightnessSlider, alignment=QtCore.Qt.AlignVCenter)
+        ml.addLayout(wr)
 
-        # HEX code and copy button
-        hexRow = QtGui.QHBoxLayout()
-        self.hexLabel = QtGui.QLabel("#FFFFFF")
-        self.hexLabel.setStyleSheet("font-size: 12px;")
+        # -- HEX code and copy button --- #
+        hr = QtGui.QHBoxLayout()
+        self.hexLabel = QtGui.QLabel("#FFFFFF"); self.hexLabel.setStyleSheet("font-size:12px;")
         self.hexLabel.mouseDoubleClickEvent = lambda e: self._startHexEdit()
-        self.copyHexBtn = QtGui.QPushButton("Copy HEX")
-        self.copyHexBtn.clicked.connect(self.copyHex)
-        hexRow.addWidget(self.hexLabel)
-        hexRow.addWidget(self.copyHexBtn)
-        mainLayout.addLayout(hexRow)
+        self.copyHexBtn = QtGui.QPushButton("Copy HEX"); self.copyHexBtn.clicked.connect(self.copyHex)
+        hr.addWidget(self.hexLabel); hr.addWidget(self.copyHexBtn)
+        ml.addLayout(hr)
 
-        ## Other Properties
-        # Intensity
-        secInt = CollapsibleSection("Intensity")
-        self.s_intensity = PropertySliders("Intensity", 0.0, 1.0, 1.0)
-        self.s_intensity.setTip("Controls how bright the light is. Higher = brighter, lower = dimmer.")
-        self.s_intensity.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "intensity", v))
-        secInt.addWidget(self.s_intensity)
-        mainLayout.addWidget(secInt)
+        def S(label, mn, mx, dv, dc=2, ctrl=None, tip=None, maxOverride=None):
+            sl = PropertySliders(label, mn, mx, dv, dc); sl._ownerWindow = self
+            if maxOverride is not None: sl._max = maxOverride
+            if tip: sl.setTip(tip)
+            if ctrl:
+                sl.connectChanged( lambda v, c=ctrl: applyControlValue(self.targetAnimSet, c, v, finalize=False))
+                sl.connectReleased(lambda v, c=ctrl: applyControlValue(self.targetAnimSet, c, v, finalize=True))
+            return sl
 
-        # Radius
-        secRad = CollapsibleSection("Radius")
-        self.s_radius = PropertySliders("Radius", 0.0, 1.0, 1.0, 2)
-        self.s_radius.setTip("Mimics a larger light source, softens shadows and causes light to wrap around objects.")
-        self.s_radius.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "radius", v))
-        secRad.addWidget(self.s_radius)
-        mainLayout.addWidget(secRad)
+        def boolRow(section, label, attr, tip, invert=False):
+            row = QtGui.QHBoxLayout(); row.setContentsMargins(0, 2, 0, 0)
+            lb  = QtGui.QLabel(label); lb.setStyleSheet("font-size:11px;")
+            chk = QtGui.QCheckBox(); chk.setChecked(False); chk.setToolTip(tip)
+            fn = (lambda s, a=attr: applyBoolValue(self.targetAnimSet, a, not bool(s))) if invert \
+               else (lambda s, a=attr: applyBoolValue(self.targetAnimSet, a, bool(s)))
+            chk.stateChanged.connect(fn)
+            row.addWidget(lb); row.addStretch(); row.addWidget(chk)
+            section._bodyLayout.addLayout(row); return chk
 
-        # FOV
-        secFOV = CollapsibleSection("Field of View")
-        self.s_hFov = PropertySliders("Horizontal FOV", 0.0, 1.0, 1.0, 2)
-        self.s_hFov.setTip("The horizontal width of the light cone.")
-        self.s_vFov = PropertySliders("Vertical FOV", 0.0, 1.0, 1.0, 2)
-        self.s_vFov.setTip("The vertical width of the light cone.")
-        self.s_hFov.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "horizontalFOV", v))
-        self.s_vFov.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "verticalFOV", v))
-        secFOV.addWidget(self.s_hFov)
-        secFOV.addWidget(self.s_vFov)
-        mainLayout.addWidget(secFOV)
+        def sec(title, sliders, boolRows=None):
+            section = CollapsibleSection(title)
+            for sl in sliders: section.addWidget(sl)
+            checks = [boolRow(section, *args) for args in (boolRows or [])]
+            ml.addWidget(section); return checks
 
-        # Shadows
-        secShad = CollapsibleSection("Shadows")
-        self.s_shadowFilter = PropertySliders("ShadowFilterSize", 0.0, 1.0, 1.0)
-        self.s_shadowFilter.setTip("Softens the edges of shadows without changing how light wraps around objects.")
-        self.s_shadowAtten = PropertySliders("ShadowAtten", 0.0, 1.0, 0.0)
-        self.s_shadowAtten.setTip("Controls shadow darkness. Higher = more transparent, lower = darker.")
-        self.s_shadowDepth = PropertySliders("shadowDepthBias", 0.0, 1.0, 0.0)
-        self.s_shadowDepth.setTip("Offsets the point at which SFM starts rendering shadows from a surface.")
-        self.s_shadowSlope = PropertySliders("shadowSlopeScale", 0.0, 1.0, 1.0)
-        self.s_shadowSlope.setTip("Narrows shadows at their base.")
-        self.s_shadowFilter.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "shadowFilterSize", v))
-        self.s_shadowAtten.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "shadowAtten", v))
-        self.s_shadowDepth.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "shadowDepthBias", v))
-        self.s_shadowSlope.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "shadowSlopeScaleDepthBias", v))
-        secShad.addWidget(self.s_shadowFilter)
-        secShad.addWidget(self.s_shadowAtten)
-        secShad.addWidget(self.s_shadowDepth)
-        secShad.addWidget(self.s_shadowSlope)
-        mainLayout.addWidget(secShad)
+        # -- Properties Sections --- #
+        # -- Intensity --- #
+        self.s_intensity = S("Intensity", 0,1,1,2,"intensity", "Controls how bright the light is.")
+        sec("Intensity", [self.s_intensity])
 
-        # Distance
-        secDist = CollapsibleSection("Distance")
-        self.s_minDist = PropertySliders("minDistance", 0.0, 1.0, 0.0, 2)
-        self.s_minDist.setTip("Distance at which the light starts.")
-        self.s_maxDist = PropertySliders("maxDistance", 0.0, 1.0, 1.0, 2)
-        self.s_maxDist.setTip("Distance at which the light ends.")
-        self.s_farZAtten = PropertySliders("farZAtten", 0.0, 1.0, 1.0, 2)
-        self.s_farZAtten.setTip("Far distance attenuation falloff.")
-        self.s_minDist.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "minDistance", v))
-        self.s_maxDist.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "maxDistance", v))
-        self.s_farZAtten.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "farZAtten", v))
-        secDist.addWidget(self.s_minDist)
-        secDist.addWidget(self.s_maxDist)
-        secDist.addWidget(self.s_farZAtten)
-        mainLayout.addWidget(secDist)
+        # -- Radius --- #
+        self.s_radius = S("Radius", 0,1,1,2,"radius", "Mimics a larger light source, softens shadows.")
+        sec("Radius", [self.s_radius])
 
-        # Attenuation
-        secAtten = CollapsibleSection("Attenuation")
-        self.s_constAtten = PropertySliders("Constant", 0.0, 1.0, 0.0)
-        self.s_constAtten.setTip("Brightness is constant across the whole light range.")
-        self.s_linearAtten = PropertySliders("Linear", 0.0, 1.0, 0.0)
-        self.s_linearAtten.setTip("Brightness drops at a steady rate with distance.")
-        self.s_quadAtten = PropertySliders("Quadratic", 0.0, 1.0, 1.0)
-        self.s_quadAtten.setTip("Brightness drops increasingly faster with distance.")
-        self.s_constAtten.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "constantAttenuation", v))
-        self.s_linearAtten.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "linearAttenuation", v))
-        self.s_quadAtten.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "quadraticAttenuation", v))
-        secAtten.addWidget(self.s_constAtten)
-        secAtten.addWidget(self.s_linearAtten)
-        secAtten.addWidget(self.s_quadAtten)
-        mainLayout.addWidget(secAtten)
+        # -- Field of View --- #
+        self.s_hFov = S("Horizontal FOV", 0,1,1,2,"horizontalFOV", "The horizontal width of the light cone.")
+        self.s_vFov = S("Vertical FOV",   0,1,1,2,"verticalFOV",   "The vertical width of the light cone.")
+        sec("Field of View", [self.s_hFov, self.s_vFov])
 
-        # Volumetric
-        secVol = CollapsibleSection("Volumetrics")
-        self.s_volIntensity = PropertySliders("volumetricIntensity", 0.0, 1.0, 1.0)
-        self.s_volIntensity.setTip("Intensity of the volumetric effect.")
-        self.s_noiseStr = PropertySliders("noiseStrength", 0.0, 1.0, 0.0)
-        self.s_noiseStr.setTip("Strength of the volumetric noise/cloudy texture.")
-        self.s_volIntensity.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "volumetricIntensity", v))
-        self.s_noiseStr.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "noiseStrength", v))
-        secVol.addWidget(self.s_volIntensity)
-        secVol.addWidget(self.s_noiseStr)
-        mainLayout.addWidget(secVol)
+        # -- Shadows --- #
+        self.s_shadowFilter = S("ShadowFilterSize", 0,1,1,2,"shadowFilterSize", "Softens shadow edges.")
+        self.s_shadowAtten = S("ShadowAtten", 0,1,0,2,"shadowAtten", "Controls shadow darkness.")
+        self.s_shadowDepth = S("shadowDepthBias", 0,1,0,2,"shadowDepthBias", "Offsets shadow rendering.")
+        self.s_shadowSlope = S("shadowSlopeScale", 0,1,1,2,"shadowSlopeScaleDepthBias", "Narrows shadows at base.")
+        (self.shadowsCheck,) = sec("Shadows", [self.s_shadowFilter, self.s_shadowAtten, self.s_shadowDepth, self.s_shadowSlope], [("Disable Shadows","castsShadows","Toggles shadow casting on this light.",True)])
 
-        # UberLight
-        secUber = CollapsibleSection("UberLights")
-        self.s_width = PropertySliders("width", 0.0, 1.0, 1.0, 2)
-        self.s_width.setTip("Width of the uberlight shape.")
-        self.s_edgeWidth = PropertySliders("edgeWidth", 0.0, 1.0, 1.0, 2)
-        self.s_edgeWidth.setTip("Softness of the uberlight width edges.")
-        self.s_height = PropertySliders("height", 0.0, 1.0, 1.0, 2)
-        self.s_height.setTip("Height of the uberlight shape.")
-        self.s_edgeHeight = PropertySliders("edgeHeight", 0.0, 1.0, 1.0, 2)
-        self.s_edgeHeight.setTip("Softness of the uberlight height edges.")
-        self.s_width.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "width", v))
-        self.s_edgeWidth.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "edgeWidth", v))
-        self.s_height.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "height", v))
-        self.s_edgeHeight.connectChanged(lambda v: applyControlValue(self.targetAnimSet, "edgeHeight", v))
-        secUber.addWidget(self.s_width)
-        secUber.addWidget(self.s_edgeWidth)
-        secUber.addWidget(self.s_height)
-        secUber.addWidget(self.s_edgeHeight)
-        uberRow = QtGui.QHBoxLayout()
-        uberRow.setContentsMargins(0, 2, 0, 0)
-        uberLbl = QtGui.QLabel("UberLight")
-        uberLbl.setStyleSheet("font-size: 11px;")
-        self.uberCheck = QtGui.QCheckBox()
-        self.uberCheck.setChecked(False)
-        self.uberCheck.stateChanged.connect(lambda s: applyBoolValue(self.targetAnimSet, "uberlight", bool(s)))
-        uberRow.addWidget(uberLbl)
-        uberRow.addStretch()
-        uberRow.addWidget(self.uberCheck)
-        secUber._bodyLayout.addLayout(uberRow)
-        mainLayout.addWidget(secUber)
-        mainLayout.addStretch()
+        # -- Distance --- #
+        self.s_minDist = S("minDistance", 0,1,0,2,"minDistance", "Distance at which the light starts.")
+        self.s_maxDist = S("maxDistance", 0,1,1,2,"maxDistance", "Distance at which the light ends.")
+        self.s_farZAtten = S("farZAtten", 0,1,1,2,"farZAtten", "Far distance attenuation falloff.")
+        sec("Distance", [self.s_minDist, self.s_maxDist, self.s_farZAtten])
 
+        # -- Attenuation --- #
+        self.s_constAtten = S("Constant", 0,1,0,2,"constantAttenuation", "Brightness is constant across range.")
+        self.s_linearAtten = S("Linear", 0,1,0,2,"linearAttenuation", "Brightness drops steadily with distance.")
+        self.s_quadAtten = S("Quadratic", 0,1,1,2,"quadraticAttenuation", "Brightness drops faster with distance.")
+        sec("Attenuation", [self.s_constAtten, self.s_linearAtten, self.s_quadAtten])
+
+        # -- Volumetrics --- #
+        self.s_volIntensity = S("volumetricIntensity", 0,1,1,2,"volumetricIntensity", "Intensity of the volumetric effect.")
+        self.s_noiseStr = S("noiseStrength", 0,1,0,2,"noiseStrength", "Volumetric noise strength.", maxOverride=1.0)
+        (self.volumetricsCheck,) = sec("Volumetrics", [self.s_volIntensity, self.s_noiseStr], [("Enable Volumetrics","volumetric","Enables volumetric lighting (god rays).",False)])
+
+        # -- UberLights --- #
+        self.s_width = S("width", 0,1,1,2,"width", "Width of the uberlight shape.")
+        self.s_edgeWidth = S("edgeWidth", 0,1,1,2,"edgeWidth", "Softness of the uberlight width edges.")
+        self.s_height = S("height", 0,1,1,2,"height", "Height of the uberlight shape.")
+        self.s_edgeHeight= S("edgeHeight",0,1,1,2,"edgeHeight","Softness of the uberlight height edges.")
+        (self.uberCheck,) = sec("UberLights", [self.s_width, self.s_edgeWidth, self.s_height, self.s_edgeHeight], [("UberLight","uberlight","Enables UberLight on this light.",False)])
+
+        # -- Credits --- #
+        ml.addStretch()
         credit = QtGui.QLabel("by Aftre")
-        credit.setStyleSheet("color: #555555; font-size: 10px;")
-        credit.setAlignment(QtCore.Qt.AlignRight)
-        mainLayout.addWidget(credit)
+        credit.setStyleSheet("color:#555;font-size:10px;"); credit.setAlignment(QtCore.Qt.AlignRight)
+        ml.addWidget(credit)
 
-        self.currentColor = QtGui.QColor(255, 255, 255)
-        self.currentR = 1.0
-        self.currentG = 1.0
-        self.currentB = 1.0
+        self.currentColor   = QtGui.QColor(255, 255, 255)
+        self.currentR = self.currentG = self.currentB = 1.0
         self.brightnessScale = 1.0
-        self._lastHeadFrame = -1
+        self._lastHeadFrame  = -1; self._lastSnapshot = {}; self._preState = None
 
-        # Auto-updates every 5ms to keep the script synced with the current playhead position
         self._playheadTimer = QtCore.QTimer(self)
-        self._playheadTimer.setInterval(5)
+        self._playheadTimer.setInterval(16)          # ~60fps poll instead of 5ms
         self._playheadTimer.timeout.connect(self._pollPlayhead)
         self._playheadTimer.start()
-
-        # Loads the current light values into the window
         self._loadFromLight()
 
-    # Every 5ms, reads the current values of the light depending where the playhead is at in the Graph Editor and sends it to
-    # the window (auto-update/detection)
-    def _pollPlayhead(self):
-        frame = sfmApp.GetHeadTimeInFrames()
-        if frame == self._lastHeadFrame:
-            return
-        self._lastHeadFrame = frame
-        a = self.targetAnimSet
-        if a is None:
-            return
-        time = getPlayheadTime()
+    def closeEvent(self, event):
+        try: QtCore.QSettings("Aftre", "ColorWheel").setValue("windowPos", self.pos())
+        except Exception: pass
+        super(ColorWheelWindow, self).closeEvent(event)
+
+        # -- Undo/Redo --- #
+    def _snapshotChannels(self):
         try:
-            chR = getChannel(a, "color_red")
-            chG = getChannel(a, "color_green")
-            chB = getChannel(a, "color_blue")
-            if chR and chG and chB:
-                r = float(chR.log.GetValue(time))
-                g = float(chG.log.GetValue(time))
-                b = float(chB.log.GetValue(time))
-                brightness = max(r, g, b, 0.001)
-                nr = min(r / brightness, 1.0)
-                ng = min(g / brightness, 1.0)
-                nb = min(b / brightness, 1.0)
-                self.currentR, self.currentG, self.currentB = nr, ng, nb
-                self.brightnessScale = min(brightness, 1.0)
-                color = QtGui.QColor(int(nr * 255), int(ng * 255), int(nb * 255))
-                self.currentColor = color
-                self.hexLabel.setText("#%02X%02X%02X" % (color.red(), color.green(), color.blue()))
-                self.wheel.setSelectorFromColor(color)
-                self.brightnessSlider.setValue(self.brightnessScale)
-        except Exception:
-            pass
-        def sv(slider, ctrl, fb):
-            try:
-                ch = getChannel(a, ctrl)
-                if ch: slider.setValueSilent(float(ch.log.GetValue(time)))
-            except Exception:
-                pass
-        sv(self.s_intensity, "intensity", 1.0)
-        sv(self.s_radius, "radius", 1.0)
-        sv(self.s_hFov, "horizontalFOV", 1.0)
-        sv(self.s_vFov, "verticalFOV", 1.0)
-        sv(self.s_shadowFilter,"shadowFilterSize", 1.0)
-        sv(self.s_shadowAtten, "shadowAtten", 0.0)
-        sv(self.s_shadowDepth, "shadowDepthBias", 0.0)
-        sv(self.s_shadowSlope, "shadowSlopeScaleDepthBias", 1.0)
-        sv(self.s_minDist, "minDistance", 0.0)
-        sv(self.s_maxDist, "maxDistance", 1.0)
-        sv(self.s_farZAtten, "farZAtten", 1.0)
-        sv(self.s_constAtten, "constantAttenuation", 0.0)
-        sv(self.s_linearAtten, "linearAttenuation", 0.0)
-        sv(self.s_quadAtten, "quadraticAttenuation", 1.0)
-        sv(self.s_volIntensity,"volumetricIntensity", 1.0)
-        sv(self.s_noiseStr, "noiseStrength", 0.0)
-        sv(self.s_width, "width", 1.0)
-        sv(self.s_edgeWidth, "edgeWidth", 1.0)
-        sv(self.s_height, "height", 1.0)
-        sv(self.s_edgeHeight, "edgeHeight", 1.0)
+            a = self.targetAnimSet
+            if a is None: return None
+            state = {}
+            t = getPlayheadTime()
+            for name in _CTRL_NAMES:
+                ch = getChannel(a, name)
+                if ch:
+                    try: state[name] = float(ch.log.GetValue(t))
+                    except Exception: pass
+            if a.light:
+                for b in _BOOL_NAMES:
+                    try: state[b] = bool(a.light.GetValue(b))
+                    except Exception: pass
+            return state or None
+        except Exception: return None
 
-    # Reads the light values and sends it to the window
-    def _loadFromLight(self):
-        self._lastHeadFrame = -1
-        a = self.targetAnimSet
-        if a is None:
-            return
+    def _capturePre(self):
+        try: self._preState = self._snapshotChannels()
+        except Exception: pass
 
-        # Reads RGB from light and sends it to the Color Wheel and brightness slider
-        time = getPlayheadTime()
-        def gv(ctrl, fb):
+    def _pushUndo(self):
+        global g_undo_stack, g_redo_stack
+        try:
+            pre = self._preState; self._preState = None
+            if pre is None: return
+            g_undo_stack.append(pre); g_redo_stack = []
+            if len(g_undo_stack) > g_max_undo_steps: g_undo_stack.pop(0)
+            self._updateUndoBtns()
+        except Exception: pass
+
+    def onUndo(self):
+        global g_undo_stack, g_redo_stack
+        try:
+            if not g_undo_stack: return
+            g_redo_stack.append(self._snapshotChannels())
+            self._restoreState(g_undo_stack.pop()); self._updateUndoBtns()
+        except Exception: pass
+
+    def onRedo(self):
+        global g_undo_stack, g_redo_stack
+        try:
+            if not g_redo_stack: return
+            g_undo_stack.append(self._snapshotChannels())
+            self._restoreState(g_redo_stack.pop()); self._updateUndoBtns()
+        except Exception: pass
+
+    def _restoreState(self, state):
+        try:
+            if not state or self.targetAnimSet is None: return
+            a = self.targetAnimSet
+            dm.StartUndo("ColorWheel", "UndoRedo", 0)
             try:
-                ch = getChannel(a, ctrl)
-                if ch: return float(ch.log.GetValue(time))
+                for name in _CTRL_NAMES:
+                    if name in state:
+                        ch = getChannel(a, name)
+                        if ch: setChannelAllKeys(ch, state[name])
+                if a.light:
+                    for b in _BOOL_NAMES:
+                        if b in state:
+                            try: a.light.SetValue(b, state[b])
+                            except Exception: pass
             except Exception: pass
-            return fb
-        r = gv("color_red", 1.0)
-        g = gv("color_green", 1.0)
-        b = gv("color_blue", 1.0)
-        brightness = max(r, g, b, 0.001)
-        nr = r / brightness
-        ng = g / brightness
-        nb = b / brightness
+            dm.FinishUndo()
+            sfmApp.SetHeadTimeInFrames(sfmApp.GetHeadTimeInFrames())
+            self._loadFromLight()
+        except Exception: pass
 
-        self.currentR, self.currentG, self.currentB = nr, ng, nb
-        self.brightnessScale = min(brightness, 1.0)
+    def _updateUndoBtns(self):
+        try:
+            self.undoBtn.setEnabled(bool(g_undo_stack))
+            self.redoBtn.setEnabled(bool(g_redo_stack))
+        except Exception: pass
 
-        color = QtGui.QColor(int(nr * 255), int(ng * 255), int(nb * 255))
-        self.currentColor = color
-        self.hexLabel.setText("#%02X%02X%02X" % (color.red(), color.green(), color.blue()))
+    def _pollPlayhead(self):
+        try:
+            a = self.targetAnimSet
+            if a is None: return
+            frame = sfmApp.GetHeadTimeInFrames()
+            t     = getPlayheadTime()
+            snap  = {}
+            for name in _CTRL_NAMES:
+                ch = getChannel(a, name)
+                if ch:
+                    try: snap[name] = float(ch.log.GetValue(t))
+                    except Exception: pass
+            if frame == self._lastHeadFrame and snap == self._lastSnapshot: return
+            self._lastHeadFrame = frame; self._lastSnapshot = snap
 
-        # Move the color wheel selector to the right coords
-        self.wheel.setSelectorFromColor(color)
-
-        # Set brightness value to the slider
-        self.brightnessSlider.setValue(self.brightnessScale)
-
-        # Loads all property sliders
-        self.s_intensity.setValueSilent(gv("intensity", 1.0))
-        self.s_radius.setValueSilent(gv("radius", 1.0))
-        self.s_hFov.setValueSilent(gv("horizontalFOV", 1.0))
-        self.s_vFov.setValueSilent(gv("verticalFOV", 1.0))
-        self.s_shadowFilter.setValueSilent(gv("shadowFilterSize", 1.0))
-        self.s_shadowAtten.setValueSilent(gv("shadowAtten", 0.0))
-        self.s_shadowDepth.setValueSilent(gv("shadowDepthBias", 0.0))
-        self.s_shadowSlope.setValueSilent(gv("shadowSlopeScaleDepthBias", 1.0))
-        self.s_minDist.setValueSilent(gv("minDistance", 0.0))
-        self.s_maxDist.setValueSilent(gv("maxDistance", 1.0))
-        self.s_farZAtten.setValueSilent(gv("farZAtten", 1.0))
-        self.s_constAtten.setValueSilent(gv("constantAttenuation", 0.0))
-        self.s_linearAtten.setValueSilent(gv("linearAttenuation", 0.0))
-        self.s_quadAtten.setValueSilent(gv("quadraticAttenuation", 1.0))
-        self.s_volIntensity.setValueSilent(gv("volumetricIntensity", 1.0))
-        self.s_noiseStr.setValueSilent(gv("noiseStrength", 0.0))
-        self.s_width.setValueSilent(gv("width", 1.0))
-        self.s_edgeWidth.setValueSilent(gv("edgeWidth", 1.0))
-        self.s_height.setValueSilent(gv("height", 1.0))
-        self.s_edgeHeight.setValueSilent(gv("edgeHeight", 1.0))
-
-        # UberLight checkbox
-        self.uberCheck.blockSignals(True)
-        self.uberCheck.setChecked(readBoolValue(a, "uberlight", False))
-        self.uberCheck.blockSignals(False)
-
-    # Applies Color Wheel color to the light
-    def onColorChanged(self, color):
-        self.currentColor = color
-        self.currentR = color.red() / 255.0
-        self.currentG = color.green() / 255.0
-        self.currentB = color.blue() / 255.0
-        self.hexLabel.setText("#%02X%02X%02X" % (color.red(), color.green(), color.blue()))
-        self._applyToLight()
-
-    # When the brightness slider is used, updates the light
-    def onIntensityChanged(self, value):
-        self.brightnessScale = value
-        self._applyToLight()
-
-    # Color value * brightness and sends value to the light
-    def _applyToLight(self):
-        r = min(self.currentR * self.brightnessScale, 1.0)
-        g = min(self.currentG * self.brightnessScale, 1.0)
-        b = min(self.currentB * self.brightnessScale, 1.0)
-        applyLightColor(self.targetAnimSet, r, g, b)
-
-    # Double-click selection and edit for the HEX values
-    def _startHexEdit(self):
-        edit = QtGui.QLineEdit(self.hexLabel.text(), self.hexLabel.parentWidget())
-        edit.setFixedWidth(self.hexLabel.width())
-        edit.setFixedHeight(22)
-        edit.setStyleSheet("font-size: 11px;")
-        edit.move(self.hexLabel.mapTo(self.hexLabel.parentWidget(), QtCore.QPoint(0, 0)))
-        edit.show()
-        edit.setFocus()
-        edit.selectAll()
-        def commit():
-            txt = edit.text().strip()
-            if not txt.startswith("#"): txt = "#" + txt
-            try:
-                color = QtGui.QColor(txt)
-                if color.isValid():
-                    self.wheel.setSelectorFromColor(color)
-                    self.currentR = color.red() / 255.0
-                    self.currentG = color.green() / 255.0
-                    self.currentB = color.blue() / 255.0
+            chR = getChannel(a,"color_red"); chG = getChannel(a,"color_green"); chB = getChannel(a,"color_blue")
+            if chR and chG and chB:
+                try:
+                    r = float(chR.log.GetValue(t))
+                    g = float(chG.log.GetValue(t))
+                    b = float(chB.log.GetValue(t))
+                    bright = max(r, g, b, 0.001)
+                    nr = min(r/bright, 1.0); ng = min(g/bright, 1.0); nb = min(b/bright, 1.0)
+                    self.currentR, self.currentG, self.currentB = nr, ng, nb
+                    self.brightnessScale = min(bright, 1.0)
+                    color = QtGui.QColor(int(nr*255), int(ng*255), int(nb*255))
+                    self.currentColor = color
                     self.hexLabel.setText("#%02X%02X%02X" % (color.red(), color.green(), color.blue()))
-                    self._applyToLight()
-            except Exception:
-                pass
-            edit.deleteLater()
-        edit.editingFinished.connect(commit)
-        edit.focusOutEvent = lambda e: (commit(), QtGui.QLineEdit.focusOutEvent(edit, e))
+                    self.wheel.setSelectorFromColor(color)
+                    self.brightnessSlider.setValue(self.brightnessScale)
+                except Exception: pass
+
+            for sl, ctrl in (
+                (self.s_intensity,"intensity"), (self.s_radius,"radius"),
+                (self.s_hFov,"horizontalFOV"), (self.s_vFov,"verticalFOV"),
+                (self.s_shadowFilter,"shadowFilterSize"), (self.s_shadowAtten,"shadowAtten"),
+                (self.s_shadowDepth,"shadowDepthBias"), (self.s_shadowSlope,"shadowSlopeScaleDepthBias"),
+                (self.s_minDist,"minDistance"), (self.s_maxDist,"maxDistance"),
+                (self.s_farZAtten,"farZAtten"), (self.s_constAtten,"constantAttenuation"),
+                (self.s_linearAtten,"linearAttenuation"), (self.s_quadAtten,"quadraticAttenuation"),
+                (self.s_volIntensity,"volumetricIntensity"), (self.s_noiseStr,"noiseStrength"),
+                (self.s_width,"width"), (self.s_edgeWidth,"edgeWidth"),
+                (self.s_height,"height"), (self.s_edgeHeight,"edgeHeight"),
+            ):
+                try:
+                    ch = getChannel(a, ctrl)
+                    if ch: sl.setValueSilent(float(ch.log.GetValue(t)))
+                except Exception: pass
+        except Exception: pass
+
+    # -- Load values from current light --- #
+    def _loadFromLight(self):
+        try:
+            self._lastHeadFrame = -1; self._lastSnapshot = {}
+            a = self.targetAnimSet
+            if a is None: return
+            r = readChannelValue(a,"color_red",1.0)
+            g = readChannelValue(a,"color_green",1.0)
+            b = readChannelValue(a,"color_blue",1.0)
+            bright = max(r, g, b, 0.001)
+            nr, ng, nb = r/bright, g/bright, b/bright
+            self.currentR, self.currentG, self.currentB = nr, ng, nb
+            self.brightnessScale = min(bright, 1.0)
+            color = QtGui.QColor(int(nr*255), int(ng*255), int(nb*255))
+            self.currentColor = color
+            self.hexLabel.setText("#%02X%02X%02X" % (color.red(), color.green(), color.blue()))
+            self.wheel.setSelectorFromColor(color)
+            self.brightnessSlider.setValue(self.brightnessScale)
+
+            for sl, ctrl, fb in (
+                (self.s_intensity,"intensity",1.0), (self.s_radius,"radius",1.0),
+                (self.s_hFov,"horizontalFOV",1.0), (self.s_vFov,"verticalFOV",1.0),
+                (self.s_shadowFilter,"shadowFilterSize",1.0),(self.s_shadowAtten,"shadowAtten",0.0),
+                (self.s_shadowDepth,"shadowDepthBias",0.0), (self.s_shadowSlope,"shadowSlopeScaleDepthBias",1.0),
+                (self.s_minDist,"minDistance",0.0), (self.s_maxDist,"maxDistance",1.0),
+                (self.s_farZAtten,"farZAtten",1.0), (self.s_constAtten,"constantAttenuation",0.0),
+                (self.s_linearAtten,"linearAttenuation",0.0),(self.s_quadAtten,"quadraticAttenuation",1.0),
+                (self.s_volIntensity,"volumetricIntensity",1.0),(self.s_noiseStr,"noiseStrength",0.0),
+                (self.s_width,"width",1.0), (self.s_edgeWidth,"edgeWidth",1.0),
+                (self.s_height,"height",1.0), (self.s_edgeHeight,"edgeHeight",1.0),
+            ):
+                try: sl.setValueSilent(readChannelValue(a, ctrl, fb))
+                except Exception: pass
+
+            for chk, ctrl, fb, invert in (
+                (self.uberCheck, "uberlight", False, False),
+                (self.volumetricsCheck, "volumetric", False, False),
+                (self.shadowsCheck, "castsShadows", True, True),
+            ):
+                try:
+                    chk.blockSignals(True)
+                    val = readBoolValue(a, ctrl, fb)
+                    chk.setChecked(not val if invert else val)
+                    chk.blockSignals(False)
+                except Exception: pass
+        except Exception: pass
+
+    def onColorChanged(self, color):
+        try:
+            self.currentColor = color
+            self.currentR = color.red()/255.0
+            self.currentG = color.green()/255.0
+            self.currentB = color.blue()/255.0
+            self.hexLabel.setText("#%02X%02X%02X" % (color.red(), color.green(), color.blue()))
+            self._applyToLight(finalize=False)
+        except Exception: pass
+
+    def onColorReleased(self, color):
+        try: self._applyToLight(finalize=True)
+        except Exception: pass
+
+    def onIntensityChanged(self, v):
+        try: self.brightnessScale = v; self._applyToLight(finalize=False)
+        except Exception: pass
+
+    def onIntensityReleased(self, v):
+        try: self._applyToLight(finalize=True)
+        except Exception: pass
+
+    def _applyToLight(self, finalize=True):
+        try:
+            s = self.brightnessScale
+            applyLightColor(self.targetAnimSet,
+                min(self.currentR*s, 1.0),
+                min(self.currentG*s, 1.0),
+                min(self.currentB*s, 1.0),
+                finalize=finalize)
+        except Exception: pass
+
+    # -- HEX value/copying --- #
+    def _startHexEdit(self):
+        try:
+            edit = QtGui.QLineEdit(self.hexLabel.text(), self.hexLabel.parentWidget())
+            edit.setFixedWidth(self.hexLabel.width()); edit.setFixedHeight(22)
+            edit.setStyleSheet("font-size:11px;")
+            edit.move(self.hexLabel.mapTo(self.hexLabel.parentWidget(), QtCore.QPoint(0, 0)))
+            edit.show(); edit.setFocus(); edit.selectAll()
+            def commit():
+                try:
+                    txt = edit.text().strip()
+                    if not txt.startswith("#"): txt = "#" + txt
+                    c = QtGui.QColor(txt)
+                    if c.isValid():
+                        self._capturePre()
+                        self.wheel.setSelectorFromColor(c)
+                        self.currentR = c.red()/255.0
+                        self.currentG = c.green()/255.0
+                        self.currentB = c.blue()/255.0
+                        self.hexLabel.setText("#%02X%02X%02X" % (c.red(), c.green(), c.blue()))
+                        self._applyToLight(finalize=True)
+                        self._pushUndo()
+                except Exception: pass
+                edit.deleteLater()
+            edit.editingFinished.connect(commit)
+            edit.focusOutEvent = lambda e: (commit(), QtGui.QLineEdit.focusOutEvent(edit, e))
+        except Exception: pass
 
     def copyHex(self):
-        QtGui.QApplication.clipboard().setText(self.hexLabel.text())
+        try: QtGui.QApplication.clipboard().setText(self.hexLabel.text())
+        except Exception: pass
 
 try:
     currentAnimSet = sfm.GetCurrentAnimationSet()
     existing = globals().get(InternalName)
     if existing is not None:
-        existing.close()
-
+        try: existing.close()
+        except Exception: pass
     tool = ColorWheelWindow(currentAnimSet)
     globals()[InternalName] = tool
     tool.show()
