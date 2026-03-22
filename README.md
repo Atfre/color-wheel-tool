@@ -1,4 +1,4 @@
-# 🎨 [SFM] Color Wheel Tool
+# [SFM] Color Wheel Tool
 
 A Color Wheel tool for Source Filmmaker built using **Python**.
 
@@ -6,7 +6,7 @@ This script adds a Color Wheel + light properties system to the rigs section of 
 
 The color wheel and sliders are inspired by Blender system. This tool introduces a more intuitive and efficient way to modify your lights.
 
-## ✨ Features
+## Features
 
 - Interactive color wheel
 - Vertical RGB brightness slider
@@ -16,6 +16,8 @@ The color wheel and sliders are inspired by Blender system. This tool introduces
 - Editable values by double-clicking
 - Tooltips for each property when hovering
 - Property sliders now work like in Blender, reaching values beyond the usual 0-1 range, with a maximum of 250
+- Undo/redo buttons for one change
+- Ctrl. + Z to clear all changes
 - Organized sections for each light property
   - Intensity
   - Radius
@@ -29,7 +31,7 @@ The color wheel and sliders are inspired by Blender system. This tool introduces
 
 ---
 
-## 📂 Structure
+## Structure
 
 ```
 color_wheel.py
@@ -37,7 +39,7 @@ color_wheel.py
 
 ---
 
-## 📦 Installation
+## Installation
 
 - **(1) Locate your SFM usermod scripts folder**
 ```
@@ -56,7 +58,7 @@ color_wheel.py
 
  ---
 
- ## 📝 Credits
+ ## Credits
 
 - Script inspired by Fames, msu355, and an0nymooose (fixes & implementations)
 - HEX code idea by Dani3D
