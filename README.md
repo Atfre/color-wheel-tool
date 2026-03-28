@@ -16,8 +16,6 @@ The color wheel and sliders are inspired by Blender system. This tool introduces
 - Editable values by double-clicking
 - Tooltips for each property when hovering
 - Property sliders now work like in Blender, reaching values beyond the usual 0-1 range, with a maximum of 250
-- Undo/redo buttons for one change
-- Ctrl. + Z to clear all changes
 - Organized sections for each light property
   - Intensity
   - Radius
