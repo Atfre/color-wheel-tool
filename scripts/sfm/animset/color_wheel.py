@@ -1,5 +1,5 @@
 #===================================================================================== #
-# [SFM] Color Wheel Tool v1.3.0
+# [SFM] Color Wheel Tool v1.3.1
 #
 #   This script adds a Color Wheel system and more lighting properties to the "rigs" 
 # section of your lights in Source Filmmaker, letting you modify light settings in a 
@@ -24,7 +24,7 @@ import colorsys, sfm, sfmApp, math, vs
 from vs import g_pDataModel as dm
 from PySide import QtGui, QtCore, shiboken
 
-ProductName = "Color Wheel v1.3.0"
+ProductName = "Color Wheel v1.3.1"
 InternalName = "color_wheel"
 
 # -- Channels names --- #
@@ -173,7 +173,7 @@ class ColorPicker(QtGui.QWidget):
 
     def __init__(self):
         super(ColorPicker, self).__init__()
-        self.setFixedSize(180, 180)
+        self.setFixedSize(160, 160)
         self.setCursor(QtCore.Qt.CrossCursor)
         self.setFocusPolicy(QtCore.Qt.ClickFocus)
         self._radius, self._mode = 96, 'Wheel'
@@ -380,7 +380,7 @@ class BrightnessSlider(QtGui.QWidget):
 
     def __init__(self, parent=None):
         super(BrightnessSlider, self).__init__(parent)
-        self.setFixedSize(16, 180)
+        self.setFixedSize(16, 160)
         self.setCursor(QtCore.Qt.SizeVerCursor)
         self.setFocusPolicy(QtCore.Qt.ClickFocus)
         self._value = 1.0
@@ -770,8 +770,8 @@ class ColorWheelWindow(QtGui.QWidget):
         self.currentR = self.currentG = self.currentB = self.brightnessScale = 1.0
         self.setWindowTitle(ProductName)
         self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
-        self.setMinimumSize(290, 560)
-        self.resize(300, 680)
+        self.setMinimumWidth(290)
+        self.resize(300, 480)
         self.setStyleSheet('''
             QWidget { color: #dddddd; font-size: 11px; }
             ColorWheelWindow, QScrollArea, QWidget#Content { background: #282828; }
@@ -782,9 +782,10 @@ class ColorWheelWindow(QtGui.QWidget):
             QToolButton:hover { color: #ffffff; }
             QToolButton#ClipboardButton { background: #383838; border: 1px solid #555555; border-radius: 2px; padding: 0; }
             QToolButton#ClipboardButton:hover { background: #494949; border-color: #888888; }
-            QToolButton#HistoryButton { background: #383838; border: 1px solid #555555; border-radius: 3px; padding: 0; }
-            QToolButton#HistoryButton:hover:enabled { background: #494949; border-color: #888888; }
-            QToolButton#HistoryButton:disabled { background: #2e2e2e; border-color: #3c3c3c; }
+            QToolButton#HeaderButton { background: #383838; border: 1px solid #555555; border-radius: 3px; padding: 0; }
+            QToolButton#HeaderButton:hover:enabled { background: #494949; border-color: #888888; }
+            QToolButton#HeaderButton:disabled { background: #2e2e2e; border-color: #3c3c3c; }
+            QToolButton#HeaderButton:checked { background: #3c4650; border-color: #718095; }
             QLineEdit { background: #202020; border: 1px solid #555555; border-radius: 3px; padding: 2px; }
             QLineEdit:focus { border-color: #888888; }
             QDoubleSpinBox { background: #202020; border: 1px solid #555555; border-radius: 3px; padding: 2px; }
@@ -810,11 +811,30 @@ class ColorWheelWindow(QtGui.QWidget):
         header = QtGui.QHBoxLayout()
         header.setContentsMargins(8, 6, 8, 0)
         header.addWidget(title, 1)
+        self.moreToolsButton = QtGui.QToolButton()
+        self.moreToolsButton.setObjectName('HeaderButton')
+        self.moreToolsButton.setFixedSize(26, 24)
+        self.moreToolsButton.setCheckable(True)
+        self.moreToolsButton.setToolTip('More tools')
+        self.moreToolsButton.setAccessibleName('More tools')
+        pixmap = QtGui.QPixmap(18, 18)
+        pixmap.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor('#dddddd'))
+        for x in (4, 9, 14):
+            painter.drawEllipse(QtCore.QPointF(x, 9), 1.3, 1.3)
+        painter.end()
+        self.moreToolsButton.setIcon(QtGui.QIcon(pixmap))
+        self.moreToolsButton.setIconSize(QtCore.QSize(18, 18))
+        self.moreToolsButton.toggled.connect(self._setMoreToolsVisible)
+        header.addWidget(self.moreToolsButton)
         self.undoButton, self.redoButton = QtGui.QToolButton(), QtGui.QToolButton()
         for button, icon, tip, callback in zip(
                 (self.undoButton, self.redoButton), historyIcons(),
                 ('Undo script edit', 'Redo script edit'), (self._undoScript, self._redoScript)):
-            button.setObjectName('HistoryButton')
+            button.setObjectName('HeaderButton')
             button.setFixedSize(26, 24)
             button.setIcon(icon)
             button.setIconSize(QtCore.QSize(18, 18))
@@ -826,6 +846,8 @@ class ColorWheelWindow(QtGui.QWidget):
         outer.addLayout(header)
         self._editingLabel = QtGui.QLabel()
         self._editingLabel.setObjectName('Muted')
+        self._editingLabel.setWordWrap(True)
+        self._editingLabel.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         self._editingLabel.setContentsMargins(8, 0, 8, 3)
         outer.addWidget(self._editingLabel)
         self._content = QtGui.QWidget()
@@ -845,10 +867,13 @@ class ColorWheelWindow(QtGui.QWidget):
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         scroll.setWidget(attributes)
 
-        colorSection = self._colorSection = CollapsibleSection('Color', expanded=True)
-        colorSection.setMinimumWidth(250)
-        colorSection.setSizePolicy(QtGui.QSizePolicy.Preferred, QtGui.QSizePolicy.Maximum)
-        contentLayout.addWidget(colorSection)
+        colorArea = self._colorArea = QtGui.QWidget()
+        colorArea.setMinimumWidth(250)
+        colorArea.setSizePolicy(QtGui.QSizePolicy.Preferred, QtGui.QSizePolicy.Maximum)
+        colorLayout = QtGui.QVBoxLayout(colorArea)
+        colorLayout.setContentsMargins(0, 0, 0, 0)
+        colorLayout.setSpacing(3)
+        contentLayout.addWidget(colorArea)
         self.wheel = ColorPicker()
         self.brightnessSlider = BrightnessSlider()
         self.wheel.colorChanged.connect(self._onPickerColorChanged)
@@ -861,18 +886,23 @@ class ColorWheelWindow(QtGui.QWidget):
         wheelRow.addSpacing(6)
         wheelRow.addWidget(self.brightnessSlider)
         wheelRow.addStretch()
-        colorSection._bodyLayout.addLayout(wheelRow)
+        colorLayout.addLayout(wheelRow)
         controls = QtGui.QWidget()
         controls.setFixedWidth(234)
         controlsLayout = QtGui.QVBoxLayout(controls)
         controlsLayout.setContentsMargins(0, 0, 0, 0)
         controlsLayout.setSpacing(4)
-        colorSection._bodyLayout.addWidget(controls, 0, QtCore.Qt.AlignHCenter)
+        colorLayout.addWidget(controls, 0, QtCore.Qt.AlignHCenter)
         brightnessRow = QtGui.QHBoxLayout()
         brightnessRow.addWidget(self._separator(), 1)
         self._brightnessLabel = QtGui.QLabel('100%')
         brightnessRow.addWidget(self._brightnessLabel, 0, QtCore.Qt.AlignRight)
         controlsLayout.addLayout(brightnessRow)
+        self._moreToolsPanel = QtGui.QWidget()
+        toolsLayout = QtGui.QVBoxLayout(self._moreToolsPanel)
+        toolsLayout.setContentsMargins(0, 0, 0, 0)
+        toolsLayout.setSpacing(4)
+        controlsLayout.addWidget(self._moreToolsPanel)
         # -- HEX code and copy button --- #
         hexRow = QtGui.QHBoxLayout()
         hexRow.setSpacing(4)
@@ -889,14 +919,14 @@ class ColorWheelWindow(QtGui.QWidget):
         hexRow.addWidget(self._swatch)
         hexRow.addWidget(self.hexEdit, 1)
         hexRow.addWidget(self.copyHexBtn)
-        controlsLayout.addLayout(hexRow)
-        controlsLayout.addSpacing(4)
+        toolsLayout.addLayout(hexRow)
+        toolsLayout.addSpacing(4)
         shapeRow, self._shapeButtons = self._optionRow(('Wheel', 'Ring', 'Square', 'Triangle'),
             self._setPickerShape, selectorIcons(self.wheel))
-        controlsLayout.addLayout(shapeRow)
+        toolsLayout.addLayout(shapeRow)
         modelRow, self._spaceButtons = self._optionRow(('RGB', 'HSV', 'HSL'), self._setColorSpace)
-        controlsLayout.addLayout(modelRow)
-        controlsLayout.addWidget(self._separator())
+        toolsLayout.addLayout(modelRow)
+        toolsLayout.addWidget(self._separator())
         self._componentLabels, self._componentEdits = [], []
         componentRow = QtGui.QHBoxLayout()
         componentRow.setSpacing(6)
@@ -920,7 +950,8 @@ class ColorWheelWindow(QtGui.QWidget):
             column.addWidget(edit)
             componentRow.addLayout(column)
         componentRow.addStretch()
-        controlsLayout.addLayout(componentRow)
+        toolsLayout.addLayout(componentRow)
+        self._moreToolsPanel.setVisible(False)
         self._setColorSpace('RGB')
         self._addDefaultButton(contentLayout)
         contentLayout.addWidget(scroll, 1)
@@ -1012,6 +1043,22 @@ class ColorWheelWindow(QtGui.QWidget):
             widget.setAttribute(QtCore.Qt.WA_Hover, True)
         self._updateColorUi()
         self._pollPlayhead()
+        self.setMinimumHeight(self.minimumSizeHint().height())
+
+    def _setMoreToolsVisible(self, visible):
+        height = self.height()
+        previous = self._colorArea.sizeHint().height()
+        self._moreToolsPanel.setVisible(visible)
+        self._moreToolsPanel.parentWidget().layout().activate()
+        self._colorArea.layout().activate()
+        self._content.layout().activate()
+        self.layout().activate()
+        height += self._colorArea.sizeHint().height() - previous
+        self.setMinimumHeight(self.minimumSizeHint().height())
+        available = QtGui.QApplication.desktop().availableGeometry(self).height()
+        available -= max(0, self.frameGeometry().height() - self.height())
+        height = max(self.minimumHeight(), self.minimumSizeHint().height(), height)
+        self.resize(self.width(), min(available, height))
 
     def _addDefaultButton(self, layout):
         button = QtGui.QPushButton('Set to Default')

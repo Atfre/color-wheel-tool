@@ -1,0 +1,8 @@
+# Local review prompts and their instruction loader.
+/.local-checks/
+/AGENTS.md
+
+# Python compilation artifacts.
+__pycache__/
+*.pyc
+*.pyo

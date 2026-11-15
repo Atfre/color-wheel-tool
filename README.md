@@ -1,4 +1,4 @@
-<h1 align="center">Color Wheel Tool v1.3.0</h1>
+<h1 align="center">Color Wheel Tool v1.3.1</h1>
 
 <p align="center">
   A color and light attributes editor for Source Filmmaker.
@@ -8,7 +8,7 @@
   <strong>Python + PySide</strong>
 </p>
 
-Choose a color, adjust light properties and see the result in SFM as you drag. Color Wheel opens from a light's **Rig** menu, loads its current settings and keeps the color picker above the light controls in one narrow window.
+Choose a color, adjust light properties and see the result in SFM as you drag. Color Wheel opens from a light's **Rig** menu, loads its current settings and keeps the color picker above the light controls in one narrow window. Only the light property categories are collapsible.
 
 [Get started](#get-started) · [Features](#features) · [Controls](#controls) · [Behavior and limits](#behavior-and-limits) · [Contribute](CONTRIBUTING.md) · [Credits](#credits-and-support)
 
@@ -41,12 +41,13 @@ The window stays attached to the light used to open it. To edit another light, r
 
 | Feature | What it does |
 | --- | --- |
+| **More tools** | Use the three-dot button beside undo/redo to show or hide HEX, picker styles, color models and component fields. These tools start collapsed to save space. |
 | **Color selectors** | Switch between Wheel, Ring, Square and Triangle using the icons below the picker. |
 | **RGB / HSV / HSL** | Enter color components in the selected color model. Component fields display one decimal place. |
 | **Brightness and HEX** | Adjust color brightness with the vertical gradient, enter a six-digit HEX color or use **Copy HEX**. |
 | **Light properties** | Adjust native SFM controls in collapsible sections below the picker. Each numeric slider has copy and paste buttons. |
 | **Undo / redo** | Restore a completed slider or picker drag in one step by using the arrow buttons or keyboard shortcuts. |
-| **Set to Default** | Restore the light's SFM control defaults in one undo action. The button sits below RGB and above Intensity. |
+| **Set to Default** | Restore the light's SFM control defaults in one undo action. The button sits below the color controls and above Intensity. |
 
 <details>
 <summary><strong>▸ Available property sections</strong></summary>
@@ -72,6 +73,7 @@ The names above match the labels in the window. Hover over a property for its to
 
 | Control | Action |
 | --- | --- |
+| **More tools (three dots)** | Expand or collapse the extra color controls. The window adjusts its height while keeping the light properties accessible. |
 | **Drag the picker** | Choose a color with live updates in SFM. |
 | **Drag the vertical gradient** | Change color brightness. This is separate from the light's Intensity property. |
 | **Drag a property slider** | Adjust its value and release to finish one history action. |

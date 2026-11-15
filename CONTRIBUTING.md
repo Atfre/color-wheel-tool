@@ -88,7 +88,7 @@ Use a disposable session: changing a property can replace existing animated valu
 | Change or area | Check inside SFM |
 | --- | --- |
 | Opening and targeting | Launch from a light's Rig menu. Confirm existing values load without changing the light. Selecting a different animation set must not retarget the open window. |
-| Color and layout | Exercise Wheel, Ring, Square and Triangle, RGB, HSV and HSL, brightness and HEX. Check the narrow window and expanded property sections for clipped labels or inaccessible controls. |
+| Color and layout | Exercise Wheel, Ring, Square and Triangle, RGB, HSV and HSL, brightness and HEX. Only light property categories should be collapsible; color controls stay directly in the window. Check the narrow window with More tools open and closed, including expanded property sections, for clipped labels or inaccessible controls. With no pending edits, toggling More tools must not change light values or create history actions. |
 | Light properties | Drag, type, copy and paste values. Reach a slider limit and reverse direction to check that it responds immediately. Check native toggles and that changes remain live while dragging. |
 | History and shortcuts | Complete a long picker or slider drag. One undo must restore its starting values and one redo its final values. The evaluated light must match both. Check the buttons: Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, including empty history and focused text fields. |
 | Defaults | Use Set to Default, check the light's native defaults, then undo and redo the reset as one action. |
